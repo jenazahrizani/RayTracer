@@ -1,0 +1,3540 @@
+```astro
+---
+import Renderer from "../components/Renderer.astro";
+import Controls from "../components/Controls.astro";
+import Benchmark from "../components/Benchmark.astro";
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+
+    <meta
+      name="description"
+      content="RAYTRC.AI autonomous navigation and ray tracing laboratory"
+    />
+
+    <meta
+      name="theme-color"
+      content="#000000"
+    />
+
+    <title>RAYTRC.AI</title>
+  </head>
+
+  <body>
+    <main
+      id="application"
+      class="application"
+    >
+      <!-- ================================================================
+           PREVIEW REGION
+           ================================================================ -->
+
+      <section
+        id="preview-region"
+        class="preview-region"
+        aria-label="RAYTRC preview"
+      >
+        <Renderer />
+      </section>
+
+      <!-- ================================================================
+           MAINFRAME REGION
+           ================================================================ -->
+
+      <section
+        id="mainframe-region"
+        class="mainframe-region"
+        aria-label="RAYTRC mainframe"
+      >
+        <div
+          id="main-terminal"
+          class="main-terminal"
+          aria-label="RAYTRC main command terminal"
+        >
+          <header class="terminal-header">
+            <div class="terminal-title">
+              <span class="cyan">
+                RAYTRC.AI
+              </span>
+
+              <span class="gray terminal-separator">
+                /
+              </span>
+
+              <span class="white terminal-mainframe">
+                MAINFRAME
+              </span>
+
+              <span class="gray terminal-separator">
+                /
+              </span>
+
+              <span class="green">
+                ONLINE
+              </span>
+            </div>
+
+            <div class="terminal-right">
+              <span
+                id="connection-state"
+              >
+                WASM ===&gt; INIT
+              </span>
+
+              <span class="gray terminal-separator">
+                |
+              </span>
+
+              <span id="clock-state">
+                00:00:00
+              </span>
+            </div>
+          </header>
+
+          <div class="command-line">
+            <span class="command-label">
+              COMMAND ===&gt;
+            </span>
+
+            <input
+              id="main-command"
+              class="main-command"
+              type="text"
+              autocomplete="off"
+              autocapitalize="characters"
+              spellcheck="false"
+              enterkeyhint="go"
+              aria-label="Main command"
+            />
+
+            <button
+              id="main-command-submit"
+              class="main-command-submit"
+              type="button"
+            >
+              EXEC
+            </button>
+          </div>
+
+          <div class="main-ruler">
+            <span>0001</span>
+
+            <span class="ruler-text">
+              +....1....+....2....+....3....+....4....+....5....+....6....+....7....+....8....+
+            </span>
+
+            <span>COLS&gt;</span>
+          </div>
+
+          <section
+            id="main-screen"
+            class="main-screen"
+            role="log"
+            aria-live="polite"
+          ></section>
+
+          <footer class="main-footer">
+            <div class="footer-left">
+              <span class="footer-item">
+                <span class="gray">
+                  PF1
+                </span>
+
+                <span class="cyan">
+                  HELP
+                </span>
+              </span>
+
+              <span class="footer-item">
+                <span class="gray">
+                  PF3
+                </span>
+
+                <span class="cyan">
+                  EXIT
+                </span>
+              </span>
+
+              <span class="footer-item">
+                <span class="gray">
+                  PF4
+                </span>
+
+                <span class="cyan">
+                  CONTROL
+                </span>
+              </span>
+
+              <span class="footer-item">
+                <span class="gray">
+                  PF6
+                </span>
+
+                <span class="cyan">
+                  BENCH
+                </span>
+              </span>
+            </div>
+
+            <div class="footer-center">
+              <span class="gray">
+                SCROLL ===&gt;
+              </span>
+
+              <span class="white">
+                CSR
+              </span>
+            </div>
+
+            <div class="footer-right">
+              <span id="main-status">
+                READY
+              </span>
+            </div>
+          </footer>
+        </div>
+      </section>
+
+      <!-- ================================================================
+           AUXILIARY UI
+           ================================================================ -->
+
+      <Controls />
+      <Benchmark />
+    </main>
+  </body>
+</html>
+
+<style>
+  /* =========================================================================
+     RESET
+     ========================================================================= */
+
+  :global(html) {
+    margin: 0;
+    padding: 0;
+
+    width: 100%;
+    height: 100%;
+
+    min-width: 0;
+    min-height: 0;
+
+    overflow: hidden;
+
+    background: #000;
+    color: #d0d0d0;
+  }
+
+  :global(body) {
+    margin: 0;
+    padding: 0;
+
+    width: 100%;
+    height: 100%;
+
+    min-width: 0;
+    min-height: 0;
+
+    overflow: hidden;
+
+    background: #000;
+    color: #d0d0d0;
+
+    font-family:
+      "IBM Plex Mono",
+      "Courier New",
+      Consolas,
+      monospace;
+
+    -webkit-text-size-adjust: 100%;
+  }
+
+  :global(*) {
+    box-sizing: border-box;
+  }
+
+  :global(button),
+  :global(input) {
+    font: inherit;
+  }
+
+  :global(button) {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+
+  /* =========================================================================
+     APPLICATION
+     ========================================================================= */
+
+  #application {
+    position: relative;
+
+    width: 100%;
+    height: 100%;
+
+    min-width: 0;
+    min-height: 0;
+
+    display: grid;
+
+    /*
+     * PREVIEW
+     * MAINFRAME
+     */
+    grid-template-rows:
+      minmax(0, 1fr)
+      minmax(300px, 40dvh);
+
+    overflow: hidden;
+
+    background: #000;
+    color: #d0d0d0;
+  }
+
+
+  /* =========================================================================
+     PREVIEW REGION
+     ========================================================================= */
+
+  #preview-region {
+    position: relative;
+
+    min-width: 0;
+    min-height: 0;
+
+    width: 100%;
+    height: 100%;
+
+    overflow: hidden;
+
+    background: #000;
+
+    border-bottom:
+      1px solid #181818;
+
+    isolation: isolate;
+  }
+
+  /*
+   * Renderer.astro owns these elements.
+   * Astro component CSS is scoped independently, therefore these
+   * overrides intentionally use :global().
+   *
+   * This is important because Renderer.astro originally specifies:
+   *
+   *   min-height: 100vh
+   *
+   * which would otherwise escape the grid.
+   */
+
+  :global(#renderer) {
+    position: relative !important;
+
+    width: 100% !important;
+    height: 100% !important;
+
+    min-width: 0 !important;
+    min-height: 0 !important;
+
+    inset: auto !important;
+
+    overflow: hidden !important;
+
+    background: #000 !important;
+  }
+
+  :global(#renderer .world-canvas) {
+    position: absolute !important;
+
+    inset: 0 !important;
+
+    width: 100% !important;
+    height: 100% !important;
+
+    min-width: 0 !important;
+    min-height: 0 !important;
+
+    display: block !important;
+
+    background: #000 !important;
+  }
+
+
+  /* =========================================================================
+     MAINFRAME REGION
+     ========================================================================= */
+
+  #mainframe-region {
+    position: relative;
+
+    min-width: 0;
+    min-height: 0;
+
+    width: 100%;
+    height: 100%;
+
+    overflow: hidden;
+
+    background: #000;
+
+    isolation: isolate;
+  }
+
+
+  /* =========================================================================
+     MAIN TERMINAL
+     ========================================================================= */
+
+  .main-terminal {
+    position: relative;
+
+    left: auto;
+    right: auto;
+    top: auto;
+    bottom: auto;
+
+    width: 100%;
+    height: 100%;
+
+    min-width: 0;
+    min-height: 0;
+
+    display: grid;
+
+    grid-template-rows:
+      auto
+      auto
+      auto
+      minmax(0, 1fr)
+      auto;
+
+    overflow: hidden;
+
+    z-index: 2;
+
+    background: #000;
+    color: #d0d0d0;
+
+    border-top:
+      1px solid #303030;
+
+    box-shadow:
+      inset 0 1px 0 #080808;
+  }
+
+
+  /* =========================================================================
+     TERMINAL HEADER
+     ========================================================================= */
+
+  .terminal-header {
+    min-width: 0;
+
+    min-height: 31px;
+
+    padding:
+      5px 10px;
+
+    display: flex;
+
+    justify-content: space-between;
+    align-items: center;
+
+    gap: 12px;
+
+    border-bottom:
+      1px solid rgba(48, 48, 48, 0.78);
+
+    background:
+      #030303;
+
+    white-space: nowrap;
+    overflow: hidden;
+
+    font-size: 11px;
+  }
+
+  .terminal-title,
+  .terminal-right {
+    min-width: 0;
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 7px;
+  }
+
+  .terminal-title {
+    flex:
+      1 1 auto;
+
+    overflow: hidden;
+  }
+
+  .terminal-title > span {
+    flex:
+      0 0 auto;
+  }
+
+  .terminal-right {
+    flex:
+      0 0 auto;
+
+    white-space: nowrap;
+  }
+
+  #connection-state {
+    min-width: 0;
+
+    max-width: 240px;
+
+    overflow: hidden;
+
+    text-overflow: ellipsis;
+
+    color: #00d400;
+  }
+
+  #clock-state {
+    color: #606060;
+  }
+
+
+  /* =========================================================================
+     COMMAND LINE
+     ========================================================================= */
+
+  .command-line {
+    min-width: 0;
+
+    min-height: 35px;
+
+    padding:
+      4px 10px;
+
+    display: grid;
+
+    grid-template-columns:
+      auto
+      minmax(0, 1fr)
+      auto;
+
+    align-items: center;
+
+    gap: 8px;
+
+    border-bottom:
+      1px solid rgba(32, 32, 32, 0.85);
+
+    background:
+      #020202;
+  }
+
+  .command-label {
+    min-width: 0;
+
+    color: #00dddd;
+
+    white-space: nowrap;
+
+    font-size: 11px;
+  }
+
+  .main-command {
+    width: 100%;
+    min-width: 0;
+
+    height: 25px;
+
+    padding:
+      2px 7px;
+
+    border:
+      1px solid #262626;
+
+    outline: none;
+
+    background: #000;
+    color: #fff;
+
+    caret-color: #00d400;
+
+    text-transform: uppercase;
+
+    font-size: 11px;
+
+    border-radius: 0;
+
+    appearance: none;
+  }
+
+  .main-command:focus {
+    border-color: #00d400;
+
+    box-shadow:
+      inset 0 0 0 1px #001c00;
+  }
+
+  .main-command::selection {
+    background: #00d400;
+    color: #000;
+  }
+
+  .main-command-submit {
+    width: 74px;
+    min-width: 74px;
+
+    height: 25px;
+
+    padding:
+      0 8px;
+
+    border:
+      1px solid #00d400;
+
+    background: #000;
+
+    color: #00d400;
+
+    cursor: pointer;
+
+    font-size: 11px;
+    font-weight: 700;
+
+    border-radius: 0;
+
+    touch-action: manipulation;
+  }
+
+  .main-command-submit:hover {
+    background: #001900;
+  }
+
+  .main-command-submit:active {
+    background: #00d400;
+    color: #000;
+  }
+
+
+  /* =========================================================================
+     RULER
+     ========================================================================= */
+
+  .main-ruler {
+    min-width: 0;
+
+    min-height: 19px;
+
+    padding:
+      2px 10px;
+
+    display: grid;
+
+    grid-template-columns:
+      55px
+      minmax(0, 1fr)
+      auto;
+
+    align-items: center;
+
+    gap: 8px;
+
+    border-bottom:
+      1px solid rgba(24, 24, 24, 0.8);
+
+    background:
+      #010101;
+
+    color: #4c4c4c;
+
+    white-space: nowrap;
+
+    overflow: hidden;
+
+    font-size: 10px;
+
+    user-select: none;
+  }
+
+  .ruler-text {
+    min-width: 0;
+
+    overflow: hidden;
+
+    text-overflow: clip;
+  }
+
+
+  /* =========================================================================
+     MAIN SCREEN
+     ========================================================================= */
+
+  .main-screen {
+    width: 100%;
+    height: 100%;
+
+    min-width: 0;
+    min-height: 0;
+
+    max-height: none;
+
+    overflow-x: hidden;
+    overflow-y: auto;
+
+    overscroll-behavior:
+      contain;
+
+    padding:
+      6px 0 18px;
+
+    background:
+      #000;
+
+    scrollbar-color:
+      #303030
+      #000;
+
+    scrollbar-width: thin;
+
+    -webkit-overflow-scrolling: touch;
+  }
+
+
+  /* =========================================================================
+     SOURCE ROW
+     ========================================================================= */
+
+  .source-line {
+    width: 100%;
+
+    min-width: 0;
+
+    min-height: 17px;
+
+    display: grid;
+
+    grid-template-columns:
+      48px
+      18px
+      92px
+      122px
+      minmax(0, 1fr);
+
+    align-items: baseline;
+
+    padding-right: 10px;
+
+    white-space: pre;
+
+    font-size: 11px;
+  }
+
+  .source-line:hover {
+    background:
+      rgba(0, 18, 0, 0.55);
+  }
+
+  .source-line-no {
+    min-width: 0;
+
+    padding-right: 8px;
+
+    text-align: right;
+
+    color: #3f3f3f;
+
+    user-select: none;
+  }
+
+  .source-level {
+    min-width: 0;
+
+    color: #414141;
+  }
+
+  .source-word {
+    min-width: 0;
+
+    overflow: hidden;
+
+    text-overflow: ellipsis;
+
+    color: #00d400;
+  }
+
+  .source-command {
+    min-width: 0;
+
+    overflow: hidden;
+
+    text-overflow: ellipsis;
+
+    color: #00dddd;
+  }
+
+  .source-value {
+    min-width: 0;
+
+    overflow: hidden;
+
+    text-overflow: ellipsis;
+
+    color: #fff;
+  }
+
+
+  /* =========================================================================
+     SOURCE COMMENT / MESSAGE
+     ========================================================================= */
+
+  .source-comment,
+  .source-message {
+    width: 100%;
+
+    min-width: 0;
+
+    white-space: pre-wrap;
+
+    overflow-wrap: anywhere;
+  }
+
+  .source-comment {
+    min-height: 17px;
+
+    padding:
+      2px 10px 2px 134px;
+
+    color: #515151;
+
+    font-size: 10px;
+  }
+
+  .source-message {
+    min-height: 17px;
+
+    padding:
+      2px 10px 2px 134px;
+
+    font-size: 10px;
+  }
+
+  .source-message.ok {
+    color: #00d400;
+  }
+
+  .source-message.info {
+    color: #00dddd;
+  }
+
+  .source-message.warn {
+    color: #ffe600;
+  }
+
+  .source-message.error {
+    color: #ff2222;
+  }
+
+
+  /* =========================================================================
+     FOOTER
+     ========================================================================= */
+
+  .main-footer {
+    min-width: 0;
+
+    min-height: 34px;
+
+    padding:
+      5px 10px;
+
+    display: grid;
+
+    grid-template-columns:
+      minmax(0, 1fr)
+      auto
+      minmax(80px, auto);
+
+    align-items: center;
+
+    gap: 12px;
+
+    border-top:
+      1px solid rgba(48, 48, 48, 0.88);
+
+    background:
+      #020202;
+
+    font-size: 10px;
+
+    white-space: nowrap;
+
+    overflow: hidden;
+  }
+
+  .footer-left,
+  .footer-center,
+  .footer-right {
+    min-width: 0;
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 8px;
+  }
+
+  .footer-left {
+    overflow-x: auto;
+    overflow-y: hidden;
+
+    scrollbar-width: none;
+
+    -webkit-overflow-scrolling:
+      touch;
+  }
+
+  .footer-left::-webkit-scrollbar {
+    display: none;
+  }
+
+  .footer-item {
+    display: inline-flex;
+
+    align-items: center;
+
+    gap: 6px;
+
+    flex:
+      0 0 auto;
+  }
+
+  .footer-center {
+    justify-content: center;
+
+    flex:
+      0 0 auto;
+  }
+
+  .footer-right {
+    justify-content: flex-end;
+
+    flex:
+      0 0 auto;
+  }
+
+  #main-status {
+    min-width: 0;
+
+    max-width: 180px;
+
+    overflow: hidden;
+
+    text-overflow: ellipsis;
+
+    color: #00d400;
+  }
+
+
+  /* =========================================================================
+     COLORS
+     ========================================================================= */
+
+  .green {
+    color: #00d400;
+  }
+
+  .cyan {
+    color: #00dddd;
+  }
+
+  .white {
+    color: #fff;
+  }
+
+  .gray {
+    color: #606060;
+  }
+
+  .red {
+    color: #ff2222;
+  }
+
+  .yellow {
+    color: #ffe600;
+  }
+
+  .magenta {
+    color: #ff5fff;
+  }
+
+
+  /* =========================================================================
+     TABLET
+     ========================================================================= */
+
+  @media (max-width: 1000px) {
+    #application {
+      grid-template-rows:
+        minmax(0, 1fr)
+        minmax(285px, 43dvh);
+    }
+
+    .terminal-header {
+      padding:
+        5px 8px;
+
+      gap: 8px;
+
+      font-size: 10px;
+    }
+
+    .terminal-title,
+    .terminal-right {
+      gap: 5px;
+    }
+
+    .command-line {
+      padding:
+        4px 8px;
+
+      gap: 6px;
+    }
+
+    .command-label,
+    .main-command,
+    .main-command-submit {
+      font-size: 10px;
+    }
+
+    .main-ruler {
+      padding:
+        2px 8px;
+
+      font-size: 9px;
+    }
+
+    .source-line {
+      grid-template-columns:
+        43px
+        16px
+        75px
+        95px
+        minmax(0, 1fr);
+
+      padding-right: 8px;
+
+      font-size: 10px;
+    }
+
+    .source-comment,
+    .source-message {
+      padding-left: 110px;
+
+      font-size: 9px;
+    }
+
+    .main-footer {
+      padding:
+        5px 8px;
+
+      gap: 8px;
+    }
+  }
+
+
+  /* =========================================================================
+     PHONE
+     ========================================================================= */
+
+  @media (max-width: 640px) {
+    #application {
+      width: 100%;
+      height: 100dvh;
+
+      min-height: 0;
+
+      grid-template-rows:
+        minmax(240px, 46dvh)
+        minmax(0, 1fr);
+    }
+
+    #preview-region {
+      min-height: 240px;
+    }
+
+    .mainframe-region {
+      min-height: 0;
+    }
+
+    .main-terminal {
+      min-height: 0;
+    }
+
+    .terminal-header {
+      min-height: 33px;
+
+      padding:
+        max(
+          4px,
+          env(safe-area-inset-top)
+        )
+        7px
+        4px;
+
+      gap: 6px;
+
+      font-size: 9px;
+    }
+
+    .terminal-title {
+      min-width: 0;
+
+      flex:
+        1 1 auto;
+
+      gap: 4px;
+    }
+
+    .terminal-right {
+      min-width: 0;
+
+      flex:
+        0 1 auto;
+
+      gap: 4px;
+    }
+
+    .terminal-mainframe,
+    .terminal-separator {
+      display: none;
+    }
+
+    #connection-state {
+      max-width: 105px;
+
+      font-size: 8px;
+    }
+
+    #clock-state {
+      font-size: 8px;
+    }
+
+    .command-line {
+      min-height: 64px;
+
+      padding:
+        5px 7px;
+
+      grid-template-columns:
+        minmax(0, 1fr)
+        62px;
+
+      grid-template-rows:
+        auto
+        29px;
+
+      gap:
+        4px 6px;
+    }
+
+    .command-label {
+      grid-column:
+        1 / -1;
+
+      grid-row:
+        1;
+
+      font-size: 9px;
+    }
+
+    .main-command {
+      grid-column:
+        1;
+
+      grid-row:
+        2;
+
+      height: 29px;
+
+      padding:
+        4px 7px;
+
+      font-size: 10px;
+    }
+
+    .main-command-submit {
+      grid-column:
+        2;
+
+      grid-row:
+        2;
+
+      width: 100%;
+      min-width: 0;
+
+      height: 29px;
+
+      padding:
+        0 5px;
+
+      font-size: 9px;
+    }
+
+    .main-ruler {
+      min-height: 16px;
+      height: 16px;
+
+      padding:
+        1px 7px;
+
+      grid-template-columns:
+        38px
+        minmax(0, 1fr)
+        auto;
+
+      gap: 5px;
+
+      font-size: 8px;
+    }
+
+    .main-screen {
+      min-width: 0;
+      min-height: 0;
+
+      height: 100%;
+
+      padding:
+        5px 0 10px;
+
+      overflow-x: hidden;
+      overflow-y: auto;
+    }
+
+    .source-line {
+      min-height: 18px;
+
+      grid-template-columns:
+        34px
+        58px
+        66px
+        minmax(0, 1fr);
+
+      padding-right: 5px;
+
+      font-size: 8px;
+    }
+
+    .source-level {
+      display: none;
+    }
+
+    .source-line-no {
+      padding-right: 4px;
+
+      font-size: 7px;
+    }
+
+    .source-comment,
+    .source-message {
+      min-height: 18px;
+
+      padding:
+        3px 7px 3px 86px;
+
+      font-size: 7px;
+
+      line-height: 11px;
+    }
+
+    .main-footer {
+      min-height: 34px;
+
+      padding:
+        4px 7px
+        max(
+          4px,
+          env(safe-area-inset-bottom)
+        );
+
+      grid-template-columns:
+        minmax(0, 1fr)
+        auto;
+
+      gap: 7px;
+
+      font-size: 8px;
+    }
+
+    .footer-left {
+      min-width: 0;
+
+      gap: 7px;
+
+      overflow-x: auto;
+    }
+
+    .footer-item {
+      gap: 4px;
+    }
+
+    .footer-center {
+      display: none;
+    }
+
+    .footer-right {
+      max-width: 90px;
+    }
+
+    #main-status {
+      max-width: 90px;
+
+      font-size: 8px;
+    }
+  }
+
+
+  /* =========================================================================
+     SMALL PHONE
+     ========================================================================= */
+
+  @media (max-width: 420px) {
+    #application {
+      grid-template-rows:
+        minmax(215px, 43dvh)
+        minmax(0, 1fr);
+    }
+
+    #preview-region {
+      min-height: 215px;
+    }
+
+    .terminal-header {
+      min-height: 31px;
+
+      padding:
+        max(
+          4px,
+          env(safe-area-inset-top)
+        )
+        6px
+        3px;
+    }
+
+    .terminal-title {
+      width: 100%;
+
+      justify-content: space-between;
+    }
+
+    .terminal-right {
+      display: none;
+    }
+
+    .terminal-title .green::before {
+      content:
+        "STATUS ===> ";
+
+      color: #606060;
+    }
+
+    .command-line {
+      min-height: 62px;
+
+      grid-template-columns:
+        minmax(0, 1fr)
+        56px;
+
+      grid-template-rows:
+        auto
+        28px;
+
+      padding:
+        5px 6px;
+
+      gap:
+        4px 5px;
+    }
+
+    .command-label {
+      font-size: 8px;
+      line-height: 11px;
+    }
+
+    .main-command {
+      height: 28px;
+
+      font-size: 9px;
+
+      padding:
+        4px 6px;
+    }
+
+    .main-command-submit {
+      height: 28px;
+
+      font-size: 8px;
+    }
+
+    .main-ruler {
+      height: 15px;
+      min-height: 15px;
+
+      padding:
+        1px 6px;
+
+      grid-template-columns:
+        32px
+        minmax(0, 1fr);
+
+      font-size: 7px;
+    }
+
+    .main-ruler > span:last-child {
+      display: none;
+    }
+
+    .source-line {
+      min-height: 17px;
+
+      grid-template-columns:
+        31px
+        53px
+        62px
+        minmax(0, 1fr);
+
+      padding-right: 4px;
+
+      font-size: 7px;
+    }
+
+    .source-line-no {
+      padding-right: 3px;
+
+      font-size: 6px;
+    }
+
+    .source-comment,
+    .source-message {
+      padding:
+        3px 6px 3px 82px;
+
+      font-size: 6px;
+
+      line-height: 10px;
+    }
+
+    .main-footer {
+      min-height: 33px;
+
+      padding:
+        4px 6px
+        max(
+          4px,
+          env(safe-area-inset-bottom)
+        );
+
+      gap: 5px;
+
+      font-size: 7px;
+    }
+
+    .footer-left {
+      gap: 6px;
+    }
+
+    .footer-item {
+      gap: 3px;
+    }
+
+    #main-status {
+      max-width: 72px;
+
+      font-size: 7px;
+    }
+  }
+
+
+  /* =========================================================================
+     VERY SHORT SCREENS
+     ========================================================================= */
+
+  @media (max-height: 600px) and (min-width: 641px) {
+    #application {
+      grid-template-rows:
+        minmax(0, 1fr)
+        minmax(250px, 42dvh);
+    }
+  }
+
+  @media (max-height: 520px) and (max-width: 640px) {
+    #application {
+      grid-template-rows:
+        minmax(175px, 39dvh)
+        minmax(0, 1fr);
+    }
+
+    #preview-region {
+      min-height: 175px;
+    }
+  }
+</style>
+
+<script>
+  type ControlState = Record<
+    string,
+    unknown
+  >;
+
+  let history: string[] = [];
+  let historyIndex = -1;
+
+  let runtimeReady = false;
+  let lastCommand = "READY";
+
+  const mainCommand =
+    document.getElementById(
+      "main-command",
+    ) as HTMLInputElement | null;
+
+  const submitButton =
+    document.getElementById(
+      "main-command-submit",
+    ) as HTMLButtonElement | null;
+
+  const mainScreen =
+    document.getElementById(
+      "main-screen",
+    );
+
+  const mainStatus =
+    document.getElementById(
+      "main-status",
+    );
+
+  const connectionState =
+    document.getElementById(
+      "connection-state",
+    );
+
+  const clockState =
+    document.getElementById(
+      "clock-state",
+    );
+
+  if (
+    !mainCommand ||
+    !submitButton ||
+    !mainScreen ||
+    !mainStatus ||
+    !connectionState ||
+    !clockState
+  ) {
+    throw new Error(
+      "RAYTRC.MAIN DOM initialization failed",
+    );
+  }
+
+  function upper(
+    value: unknown,
+  ): string {
+    return String(
+      value ?? "",
+    )
+      .trim()
+      .toUpperCase();
+  }
+
+  function pad(
+    value: number,
+    length: number,
+  ): string {
+    return String(
+      value,
+    ).padStart(
+      length,
+      "0",
+    );
+  }
+
+  function dispatch(
+    name: string,
+    detail: Record<
+      string,
+      unknown
+    > = {},
+  ): void {
+    window.dispatchEvent(
+      new CustomEvent(
+        name,
+        {
+          detail,
+        },
+      ),
+    );
+  }
+
+  function setStatus(
+    value: string,
+  ): void {
+    lastCommand =
+      value;
+
+    mainStatus.textContent =
+      value;
+
+    if (
+      value.includes(
+        "ERROR",
+      )
+    ) {
+      mainStatus.className =
+        "red";
+    } else if (
+      value.includes(
+        "RUN",
+      ) ||
+      value.includes(
+        "TRAIN",
+      ) ||
+      value.includes(
+        "READY",
+      ) ||
+      value.includes(
+        "COMPLETE",
+      )
+    ) {
+      mainStatus.className =
+        "green";
+    } else {
+      mainStatus.className =
+        "cyan";
+    }
+  }
+
+  function setConnection(
+    state: string,
+    tone:
+      | "ready"
+      | "wait"
+      | "error" = "wait",
+  ): void {
+    connectionState.textContent =
+      `WASM ===> ${state}`;
+
+    if (
+      tone === "ready"
+    ) {
+      connectionState.className =
+        "green";
+    } else if (
+      tone === "error"
+    ) {
+      connectionState.className =
+        "red";
+    } else {
+      connectionState.className =
+        "yellow";
+    }
+  }
+
+  function line(
+    number: number,
+    level: string,
+    word: string,
+    command: string,
+    value: string,
+  ): void {
+    const row =
+      document.createElement(
+        "div",
+      );
+
+    row.className =
+      "source-line";
+
+    const lineNo =
+      document.createElement(
+        "span",
+      );
+
+    lineNo.className =
+      "source-line-no";
+
+    lineNo.textContent =
+      pad(
+        number,
+        4,
+      );
+
+    const levelNode =
+      document.createElement(
+        "span",
+      );
+
+    levelNode.className =
+      "source-level";
+
+    levelNode.textContent =
+      level;
+
+    const wordNode =
+      document.createElement(
+        "span",
+      );
+
+    wordNode.className =
+      "source-word";
+
+    wordNode.textContent =
+      word;
+
+    const commandNode =
+      document.createElement(
+        "span",
+      );
+
+    commandNode.className =
+      "source-command";
+
+    commandNode.textContent =
+      command;
+
+    const valueNode =
+      document.createElement(
+        "span",
+      );
+
+    valueNode.className =
+      "source-value";
+
+    valueNode.textContent =
+      value;
+
+    row.append(
+      lineNo,
+      levelNode,
+      wordNode,
+      commandNode,
+      valueNode,
+    );
+
+    mainScreen.appendChild(
+      row,
+    );
+  }
+
+  function comment(
+    number: number,
+    text: string,
+  ): void {
+    const row =
+      document.createElement(
+        "div",
+      );
+
+    row.className =
+      "source-comment";
+
+    row.textContent =
+      `${pad(number, 4)} *> ${text}`;
+
+    mainScreen.appendChild(
+      row,
+    );
+  }
+
+  function message(
+    text: string,
+    tone:
+      | "ok"
+      | "info"
+      | "warn"
+      | "error" = "info",
+  ): void {
+    const row =
+      document.createElement(
+        "div",
+      );
+
+    row.className =
+      `source-message ${tone}`;
+
+    row.textContent =
+      text;
+
+    mainScreen.appendChild(
+      row,
+    );
+
+    mainScreen.scrollTop =
+      mainScreen.scrollHeight;
+  }
+
+  function renderMainScreen(): void {
+    mainScreen.innerHTML =
+      "";
+
+    line(
+      10,
+      "01",
+      "MODULE",
+      "NAME",
+      "RAYTRC.AI",
+    );
+
+    line(
+      20,
+      "05",
+      "SYSTEM",
+      "TYPE",
+      "AUTONOMOUS NAVIGATION LAB",
+    );
+
+    line(
+      30,
+      "05",
+      "RUNTIME",
+      "BACKEND",
+      runtimeReady
+        ? "RUST WASM"
+        : "INITIALIZING",
+    );
+
+    line(
+      40,
+      "05",
+      "STATUS",
+      "COMMAND",
+      lastCommand,
+    );
+
+    comment(
+      50,
+      "------------------------------------------------------------",
+    );
+
+    comment(
+      60,
+      "WORLD / AGENT / TRAINER",
+    );
+
+    line(
+      70,
+      "10",
+      "WORLD",
+      "TYPE",
+      "RANDOMIZED 2.5D NAVIGATION",
+    );
+
+    line(
+      80,
+      "10",
+      "WORLD",
+      "STATE",
+      "OBSTACLES + TARGET + VALID PATH",
+    );
+
+    line(
+      90,
+      "10",
+      "AGENT",
+      "MODEL",
+      "37 -> 64 -> 64 -> 5",
+    );
+
+    line(
+      100,
+      "10",
+      "AGENT",
+      "SENSORS",
+      "32 RAY DIRECTIONS",
+    );
+
+    line(
+      110,
+      "10",
+      "TRAIN",
+      "ALGORITHM",
+      "DQN / EXPERIENCE REPLAY",
+    );
+
+    line(
+      120,
+      "10",
+      "TRAIN",
+      "TARGET",
+      "ADAPTIVE NAVIGATION",
+    );
+
+    comment(
+      130,
+      "------------------------------------------------------------",
+    );
+
+    comment(
+      140,
+      "COMMAND MEMBER ACCESS",
+    );
+
+    line(
+      150,
+      "10",
+      "CMD",
+      "CONTROL",
+      "OPEN CONTROL MEMBER",
+    );
+
+    line(
+      160,
+      "10",
+      "CMD",
+      "BENCH",
+      "OPEN BENCHMARK MEMBER",
+    );
+
+    line(
+      170,
+      "10",
+      "CMD",
+      "RUN",
+      "AUTONOMOUS RUN",
+    );
+
+    line(
+      180,
+      "10",
+      "CMD",
+      "TRAIN",
+      "START AI TRAINING",
+    );
+
+    line(
+      190,
+      "10",
+      "CMD",
+      "STEP",
+      "EXECUTE ONE AI STEP",
+    );
+
+    line(
+      200,
+      "10",
+      "CMD",
+      "EVAL",
+      "EVALUATE MODEL",
+    );
+
+    line(
+      210,
+      "10",
+      "CMD",
+      "RESET",
+      "RESET AI",
+    );
+
+    line(
+      220,
+      "10",
+      "CMD",
+      "ENV",
+      "RESET ENVIRONMENT",
+    );
+
+    line(
+      230,
+      "10",
+      "CMD",
+      "MODEL",
+      "SAVE / LOAD / EXPORT / IMPORT",
+    );
+
+    comment(
+      240,
+      "------------------------------------------------------------",
+    );
+
+    line(
+      250,
+      "05",
+      "KEY",
+      "PF1",
+      "HELP",
+    );
+
+    line(
+      260,
+      "05",
+      "KEY",
+      "PF3",
+      "EXIT",
+    );
+
+    line(
+      270,
+      "05",
+      "KEY",
+      "PF4",
+      "CONTROL",
+    );
+
+    line(
+      280,
+      "05",
+      "KEY",
+      "PF6",
+      "BENCH",
+    );
+
+    comment(
+      290,
+      "SCREEN ===> SOURCE MEMBER / COMMAND INTERPRETER",
+    );
+
+    message(
+      runtimeReady
+        ? "RUNTIME READY / ENTER COMMAND"
+        : "RUNTIME INITIALIZING / WAIT",
+      runtimeReady
+        ? "ok"
+        : "warn",
+    );
+  }
+
+  function sendControlsOpen(): void {
+    dispatch(
+      "raytracer:controls-open",
+      {
+        source:
+          "index",
+      },
+    );
+  }
+
+  function sendBenchmarkOpen(): void {
+    dispatch(
+      "raytracer:benchmark-open",
+      {
+        source:
+          "index",
+      },
+    );
+  }
+
+  function executeCommand(
+    input: string,
+  ): boolean {
+    const raw =
+      input.trim();
+
+    if (!raw) {
+      return false;
+    }
+
+    const command =
+      upper(raw);
+
+    history.unshift(
+      raw,
+    );
+
+    if (
+      history.length >
+      100
+    ) {
+      history.length =
+        100;
+    }
+
+    historyIndex =
+      -1;
+
+    if (
+      command === "HELP" ||
+      command === "?"
+    ) {
+      renderHelp();
+
+      return true;
+    }
+
+    if (
+      command === "EXIT" ||
+      command === "QUIT" ||
+      command === "CLOSE"
+    ) {
+      dispatch(
+        "raytracer:stop",
+        {
+          source:
+            "index",
+        },
+      );
+
+      setStatus(
+        "EXIT REQUESTED",
+      );
+
+      message(
+        "EXIT REQUEST SENT TO RUNTIME",
+        "warn",
+      );
+
+      return true;
+    }
+
+    if (
+      command === "CONTROL" ||
+      command === "CONTROLS" ||
+      command === "EDIT"
+    ) {
+      sendControlsOpen();
+
+      setStatus(
+        "CONTROL OPEN",
+      );
+
+      message(
+        "CONTROL MEMBER OPEN REQUESTED",
+        "info",
+      );
+
+      return true;
+    }
+
+    if (
+      command === "BENCH" ||
+      command === "BENCHMARK"
+    ) {
+      sendBenchmarkOpen();
+
+      setStatus(
+        "BENCH OPEN",
+      );
+
+      message(
+        "BENCHMARK MEMBER OPEN REQUESTED",
+        "info",
+      );
+
+      return true;
+    }
+
+    if (
+      command === "RUN"
+    ) {
+      dispatch(
+        "raytracer:ai",
+        {
+          action:
+            "RUN",
+
+          source:
+            "index",
+        },
+      );
+
+      setStatus(
+        "RUN REQUESTED",
+      );
+
+      message(
+        "AUTONOMOUS RUNTIME START REQUESTED",
+        "ok",
+      );
+
+      return true;
+    }
+
+    if (
+      command === "TRAIN"
+    ) {
+      dispatch(
+        "raytracer:ai",
+        {
+          action:
+            "START_TRAINING",
+
+          source:
+            "index",
+        },
+      );
+
+      setStatus(
+        "TRAIN REQUESTED",
+      );
+
+      message(
+        "AI CONTINUOUS TRAINING REQUESTED",
+        "ok",
+      );
+
+      return true;
+    }
+
+    if (
+      command.startsWith(
+        "TRAIN ",
+      )
+    ) {
+      const parts =
+        command.split(
+          /\s+/,
+        );
+
+      const count =
+        Math.max(
+          1,
+          Number.parseInt(
+            parts[1] ??
+              "250",
+            10,
+          ) || 250,
+        );
+
+      dispatch(
+        "raytracer:ai",
+        {
+          action:
+            "TRAIN_STEPS",
+
+          count,
+
+          source:
+            "index",
+        },
+      );
+
+      setStatus(
+        `TRAIN ${count}`,
+      );
+
+      message(
+        `AI TRAIN REQUESTED / ${count} STEPS`,
+        "ok",
+      );
+
+      return true;
+    }
+
+    if (
+      command === "STEP"
+    ) {
+      dispatch(
+        "raytracer:ai",
+        {
+          action:
+            "STEP",
+
+          source:
+            "index",
+        },
+      );
+
+      setStatus(
+        "AI STEP",
+      );
+
+      message(
+        "SINGLE AI STEP REQUESTED",
+        "info",
+      );
+
+      return true;
+    }
+
+    if (
+      command === "EVAL"
+    ) {
+      dispatch(
+        "raytracer:ai",
+        {
+          action:
+            "EVALUATE",
+
+          count:
+            10,
+
+          source:
+            "index",
+        },
+      );
+
+      setStatus(
+        "EVAL REQUESTED",
+      );
+
+      message(
+        "AI EVALUATION REQUESTED / 10 EPISODES",
+        "info",
+      );
+
+      return true;
+    }
+
+    if (
+      command.startsWith(
+        "EVAL ",
+      )
+    ) {
+      const parts =
+        command.split(
+          /\s+/,
+        );
+
+      const count =
+        Math.max(
+          1,
+          Number.parseInt(
+            parts[1] ??
+              "10",
+            10,
+          ) || 10,
+        );
+
+      dispatch(
+        "raytracer:ai",
+        {
+          action:
+            "EVALUATE",
+
+          count,
+
+          source:
+            "index",
+        },
+      );
+
+      setStatus(
+        `EVAL ${count}`,
+      );
+
+      message(
+        `AI EVALUATION REQUESTED / ${count} EPISODES`,
+        "info",
+      );
+
+      return true;
+    }
+
+    if (
+      command === "RESET"
+    ) {
+      dispatch(
+        "raytracer:ai",
+        {
+          action:
+            "RESET_AI",
+
+          source:
+            "index",
+        },
+      );
+
+      setStatus(
+        "AI RESET",
+      );
+
+      message(
+        "AI NETWORK RESET REQUESTED",
+        "ok",
+      );
+
+      return true;
+    }
+
+    if (
+      command === "ENV" ||
+      command === "ENV RESET"
+    ) {
+      dispatch(
+        "raytracer:ai",
+        {
+          action:
+            "RESET_ENVIRONMENT",
+
+          seed:
+            Date.now() >>> 0,
+
+          source:
+            "index",
+        },
+      );
+
+      setStatus(
+        "ENV RESET",
+      );
+
+      message(
+        "NEW ENVIRONMENT REQUESTED",
+        "ok",
+      );
+
+      return true;
+    }
+
+    if (
+      command.startsWith(
+        "ENV ",
+      )
+    ) {
+      const parts =
+        command.split(
+          /\s+/,
+        );
+
+      const seed =
+        Number.parseInt(
+          parts[1] ??
+            "",
+          10,
+        );
+
+      dispatch(
+        "raytracer:ai",
+        {
+          action:
+            "RESET_ENVIRONMENT",
+
+          seed:
+            Number.isFinite(
+              seed,
+            )
+              ? seed >>> 0
+              : Date.now() >>> 0,
+
+          source:
+            "index",
+        },
+      );
+
+      setStatus(
+        "ENV RESET",
+      );
+
+      message(
+        "ENVIRONMENT RESET REQUESTED",
+        "ok",
+      );
+
+      return true;
+    }
+
+    if (
+      command === "STOP"
+    ) {
+      dispatch(
+        "raytracer:ai",
+        {
+          action:
+            "STOP",
+
+          source:
+            "index",
+        },
+      );
+
+      setStatus(
+        "STOP REQUESTED",
+      );
+
+      message(
+        "RUNTIME STOP REQUESTED",
+        "warn",
+      );
+
+      return true;
+    }
+
+    if (
+      command === "STATUS"
+    ) {
+      dispatch(
+        "raytracer:controls-status",
+        {
+          source:
+            "index",
+        },
+      );
+
+      dispatch(
+        "raytracer:ai",
+        {
+          action:
+            "STATUS",
+
+          source:
+            "index",
+        },
+      );
+
+      setStatus(
+        "STATUS REQUESTED",
+      );
+
+      message(
+        "STATUS REQUEST SENT",
+        "info",
+      );
+
+      return true;
+    }
+
+    if (
+      command === "VIEW"
+    ) {
+      dispatch(
+        "raytracer:view",
+        {
+          source:
+            "index",
+        },
+      );
+
+      setStatus(
+        "VIEW",
+      );
+
+      message(
+        "WORLD VIEW REQUESTED",
+        "info",
+      );
+
+      return true;
+    }
+
+    if (
+      command === "MODEL SAVE"
+    ) {
+      dispatch(
+        "raytracer:ai",
+        {
+          action:
+            "SAVE_MODEL",
+
+          source:
+            "index",
+        },
+      );
+
+      setStatus(
+        "MODEL SAVE",
+      );
+
+      message(
+        "MODEL SAVE REQUESTED",
+        "ok",
+      );
+
+      return true;
+    }
+
+    if (
+      command === "MODEL LOAD"
+    ) {
+      dispatch(
+        "raytracer:ai",
+        {
+          action:
+            "LOAD_MODEL",
+
+          source:
+            "index",
+        },
+      );
+
+      setStatus(
+        "MODEL LOAD",
+      );
+
+      message(
+        "MODEL LOAD REQUESTED",
+        "info",
+      );
+
+      return true;
+    }
+
+    if (
+      command === "MODEL EXPORT"
+    ) {
+      dispatch(
+        "raytracer:ai",
+        {
+          action:
+            "EXPORT_MODEL",
+
+          source:
+            "index",
+        },
+      );
+
+      setStatus(
+        "MODEL EXPORT",
+      );
+
+      message(
+        "MODEL EXPORT REQUESTED",
+        "info",
+      );
+
+      return true;
+    }
+
+    if (
+      command === "MODEL IMPORT"
+    ) {
+      dispatch(
+        "raytracer:ai",
+        {
+          action:
+            "IMPORT_MODEL",
+
+          source:
+            "index",
+        },
+      );
+
+      setStatus(
+        "MODEL IMPORT",
+      );
+
+      message(
+        "MODEL IMPORT REQUESTED",
+        "info",
+      );
+
+      return true;
+    }
+
+    if (
+      command === "CLEAR" ||
+      command === "CLS"
+    ) {
+      mainScreen.innerHTML =
+        "";
+
+      message(
+        "MAIN SCREEN CLEARED",
+        "ok",
+      );
+
+      return true;
+    }
+
+    if (
+      command.startsWith(
+        "PRESET ",
+      )
+    ) {
+      const preset =
+        command.split(
+          /\s+/,
+        )[1] ??
+        "";
+
+      dispatch(
+        "raytracer:preset",
+        {
+          preset,
+
+          source:
+            "index",
+        },
+      );
+
+      setStatus(
+        `PRESET ${preset}`,
+      );
+
+      message(
+        `PRESET ${preset} REQUESTED`,
+        "ok",
+      );
+
+      return true;
+    }
+
+    if (
+      command.startsWith(
+        "SET ",
+      )
+    ) {
+      dispatch(
+        "raytracer:controls-command",
+        {
+          command,
+
+          source:
+            "index",
+        },
+      );
+
+      setStatus(
+        "CONTROL COMMAND",
+      );
+
+      message(
+        `FORWARD ===> ${command}`,
+        "info",
+      );
+
+      return true;
+    }
+
+    message(
+      `INVALID COMMAND ===> ${raw}`,
+      "error",
+    );
+
+    setStatus(
+      "ERROR",
+    );
+
+    return false;
+  }
+
+  function renderHelp(): void {
+    mainScreen.innerHTML =
+      "";
+
+    comment(
+      10,
+      "------------------------------------------------------------",
+    );
+
+    line(
+      20,
+      "01",
+      "HELP",
+      "MODULE",
+      "RAYTRC.AI",
+    );
+
+    comment(
+      30,
+      "CORE",
+    );
+
+    line(
+      40,
+      "10",
+      "CMD",
+      "CONTROL",
+      "OPEN CONTROL MEMBER",
+    );
+
+    line(
+      50,
+      "10",
+      "CMD",
+      "BENCH",
+      "OPEN BENCHMARK MEMBER",
+    );
+
+    line(
+      60,
+      "10",
+      "CMD",
+      "RUN",
+      "START AUTONOMOUS NAVIGATION",
+    );
+
+    line(
+      70,
+      "10",
+      "CMD",
+      "TRAIN",
+      "START CONTINUOUS TRAINING",
+    );
+
+    line(
+      80,
+      "10",
+      "CMD",
+      "TRAIN N",
+      "TRAIN N STEPS",
+    );
+
+    line(
+      90,
+      "10",
+      "CMD",
+      "STEP",
+      "EXECUTE ONE AI STEP",
+    );
+
+    line(
+      100,
+      "10",
+      "CMD",
+      "EVAL N",
+      "EVALUATE N EPISODES",
+    );
+
+    line(
+      110,
+      "10",
+      "CMD",
+      "STOP",
+      "STOP RUNTIME",
+    );
+
+    line(
+      120,
+      "10",
+      "CMD",
+      "RESET",
+      "RESET AI",
+    );
+
+    line(
+      130,
+      "10",
+      "CMD",
+      "ENV",
+      "RESET WORLD",
+    );
+
+    line(
+      140,
+      "10",
+      "CMD",
+      "ENV N",
+      "RESET WORLD WITH SEED",
+    );
+
+    comment(
+      150,
+      "MODEL",
+    );
+
+    line(
+      160,
+      "10",
+      "CMD",
+      "MODEL SAVE",
+      "SAVE MODEL TO LOCAL STORAGE",
+    );
+
+    line(
+      170,
+      "10",
+      "CMD",
+      "MODEL LOAD",
+      "LOAD MODEL FROM LOCAL STORAGE",
+    );
+
+    line(
+      180,
+      "10",
+      "CMD",
+      "MODEL EXPORT",
+      "EXPORT MODEL TO FILE",
+    );
+
+    line(
+      190,
+      "10",
+      "CMD",
+      "MODEL IMPORT",
+      "IMPORT MODEL FROM FILE",
+    );
+
+    comment(
+      200,
+      "CONTROL FORWARDING",
+    );
+
+    line(
+      210,
+      "10",
+      "SET",
+      "SET WIDTH N",
+      "FORWARDED TO CONTROL MEMBER",
+    );
+
+    line(
+      220,
+      "10",
+      "SET",
+      "SET DIFFICULTY N",
+      "FORWARDED TO CONTROL MEMBER",
+    );
+
+    line(
+      230,
+      "10",
+      "SET",
+      "SET OBSTACLES N",
+      "FORWARDED TO CONTROL MEMBER",
+    );
+
+    line(
+      240,
+      "10",
+      "SET",
+      "SET LR N",
+      "FORWARDED TO CONTROL MEMBER",
+    );
+
+    line(
+      250,
+      "10",
+      "SET",
+      "SET GAMMA N",
+      "FORWARDED TO CONTROL MEMBER",
+    );
+
+    comment(
+      260,
+      "PRESETS",
+    );
+
+    line(
+      270,
+      "10",
+      "CMD",
+      "PRESET DRAFT",
+      "LOW COST",
+    );
+
+    line(
+      280,
+      "10",
+      "CMD",
+      "PRESET PREVIEW",
+      "MEDIUM COST",
+    );
+
+    line(
+      290,
+      "10",
+      "CMD",
+      "PRESET FINAL",
+      "HIGH QUALITY",
+    );
+
+    line(
+      300,
+      "10",
+      "CMD",
+      "PRESET ULTRA",
+      "MAXIMUM RENDER",
+    );
+
+    line(
+      310,
+      "10",
+      "CMD",
+      "PRESET AI",
+      "AI TRAINING PROFILE",
+    );
+
+    comment(
+      320,
+      "------------------------------------------------------------",
+    );
+
+    message(
+      "HELP DISPLAYED / COMMAND INTERPRETER READY",
+      "info",
+    );
+
+    setStatus(
+      "HELP",
+    );
+  }
+
+  function updateClock(): void {
+    const now =
+      new Date();
+
+    const h =
+      String(
+        now.getHours(),
+      ).padStart(
+        2,
+        "0",
+      );
+
+    const m =
+      String(
+        now.getMinutes(),
+      ).padStart(
+        2,
+        "0",
+      );
+
+    const s =
+      String(
+        now.getSeconds(),
+      ).padStart(
+        2,
+        "0",
+      );
+
+    clockState.textContent =
+      `${h}:${m}:${s}`;
+  }
+
+
+  /* =========================================================================
+     COMMAND INPUT
+     ========================================================================= */
+
+  mainCommand.addEventListener(
+    "keydown",
+    (event) => {
+      if (
+        event.key ===
+        "Enter"
+      ) {
+        event.preventDefault();
+
+        const value =
+          mainCommand.value.trim();
+
+        if (!value) {
+          return;
+        }
+
+        executeCommand(
+          value,
+        );
+
+        mainCommand.value =
+          "";
+
+        return;
+      }
+
+      if (
+        event.key ===
+        "ArrowUp"
+      ) {
+        event.preventDefault();
+
+        if (
+          !history.length
+        ) {
+          return;
+        }
+
+        historyIndex =
+          Math.min(
+            historyIndex + 1,
+            history.length - 1,
+          );
+
+        mainCommand.value =
+          history[
+            historyIndex
+          ] ?? "";
+
+        mainCommand.setSelectionRange(
+          mainCommand.value.length,
+          mainCommand.value.length,
+        );
+
+        return;
+      }
+
+      if (
+        event.key ===
+        "ArrowDown"
+      ) {
+        event.preventDefault();
+
+        if (
+          !history.length
+        ) {
+          return;
+        }
+
+        historyIndex =
+          Math.max(
+            historyIndex - 1,
+            -1,
+          );
+
+        mainCommand.value =
+          historyIndex >=
+          0
+            ? history[
+                historyIndex
+              ] ?? ""
+            : "";
+
+        return;
+      }
+    },
+  );
+
+
+  /* =========================================================================
+     EXEC BUTTON
+     ========================================================================= */
+
+  submitButton.addEventListener(
+    "click",
+    () => {
+      const value =
+        mainCommand.value.trim();
+
+      if (!value) {
+        mainCommand.focus();
+
+        return;
+      }
+
+      executeCommand(
+        value,
+      );
+
+      mainCommand.value =
+        "";
+
+      mainCommand.focus();
+    },
+  );
+
+
+  /* =========================================================================
+     FUNCTION KEYS
+     ========================================================================= */
+
+  window.addEventListener(
+    "keydown",
+    (event) => {
+      if (
+        event.ctrlKey ||
+        event.altKey ||
+        event.metaKey
+      ) {
+        return;
+      }
+
+      if (
+        event.key ===
+        "F1"
+      ) {
+        event.preventDefault();
+
+        renderHelp();
+
+        return;
+      }
+
+      if (
+        event.key ===
+        "F3"
+      ) {
+        event.preventDefault();
+
+        executeCommand(
+          "EXIT",
+        );
+
+        return;
+      }
+
+      if (
+        event.key ===
+        "F4"
+      ) {
+        event.preventDefault();
+
+        executeCommand(
+          "CONTROL",
+        );
+
+        return;
+      }
+
+      if (
+        event.key ===
+        "F6"
+      ) {
+        event.preventDefault();
+
+        executeCommand(
+          "BENCH",
+        );
+
+        return;
+      }
+
+      if (
+        event.key ===
+        "Escape"
+      ) {
+        mainCommand.value =
+          "";
+
+        mainCommand.focus();
+      }
+    },
+  );
+
+
+  /* =========================================================================
+     RENDERER READY
+     ========================================================================= */
+
+  window.addEventListener(
+    "raytracer:renderer-ready",
+    () => {
+      runtimeReady =
+        true;
+
+      setConnection(
+        "READY",
+        "ready",
+      );
+
+      setStatus(
+        "READY",
+      );
+
+      renderMainScreen();
+
+      mainCommand.focus();
+    },
+  );
+
+
+  /* =========================================================================
+     AI STATE
+     ========================================================================= */
+
+  window.addEventListener(
+    "raytracer:ai-state",
+    (event) => {
+      const detail =
+        (
+          event as CustomEvent<
+            Record<
+              string,
+              unknown
+            >
+          >
+        ).detail ?? {};
+
+      const state =
+        upper(
+          detail.state,
+        );
+
+      if (
+        state ===
+        "ERROR"
+      ) {
+        setStatus(
+          "AI ERROR",
+        );
+
+        return;
+      }
+
+      if (
+        state ===
+        "RUNNING"
+      ) {
+        setStatus(
+          "RUNNING",
+        );
+
+        return;
+      }
+
+      if (
+        state ===
+        "COMPLETE"
+      ) {
+        setStatus(
+          "COMPLETE",
+        );
+
+        return;
+      }
+
+      if (
+        detail.status
+      ) {
+        setStatus(
+          String(
+            detail.status,
+          ),
+        );
+      }
+    },
+  );
+
+
+  /* =========================================================================
+     AI ERROR
+     ========================================================================= */
+
+  window.addEventListener(
+    "raytracer:ai-error",
+    (event) => {
+      const detail =
+        (
+          event as CustomEvent<
+            Record<
+              string,
+              unknown
+            >
+          >
+        ).detail ?? {};
+
+      runtimeReady =
+        false;
+
+      setConnection(
+        "ERROR",
+        "error",
+      );
+
+      setStatus(
+        "ERROR",
+      );
+
+      message(
+        `RUNTIME ERROR ===> ${
+          String(
+            detail.error ??
+              "UNKNOWN ERROR",
+          )
+        }`,
+        "error",
+      );
+    },
+  );
+
+
+  /* =========================================================================
+     RUNTIME EVENTS
+     ========================================================================= */
+
+  window.addEventListener(
+    "raytracer:run",
+    () => {
+      setStatus(
+        "RUNNING",
+      );
+
+      message(
+        "AUTONOMOUS RUN ACTIVE",
+        "ok",
+      );
+    },
+  );
+
+  window.addEventListener(
+    "raytracer:stop",
+    () => {
+      setStatus(
+        "STOPPED",
+      );
+
+      message(
+        "RUNTIME STOPPED",
+        "warn",
+      );
+    },
+  );
+
+  window.addEventListener(
+    "raytracer:training-start",
+    () => {
+      setStatus(
+        "TRAINING",
+      );
+
+      message(
+        "AI TRAINING ACTIVE",
+        "ok",
+      );
+    },
+  );
+
+  window.addEventListener(
+    "raytracer:training-complete",
+    () => {
+      setStatus(
+        "COMPLETE",
+      );
+
+      message(
+        "AI TRAINING COMPLETE",
+        "ok",
+      );
+    },
+  );
+
+  window.addEventListener(
+    "raytracer:training-stop",
+    () => {
+      setStatus(
+        "STOPPED",
+      );
+
+      message(
+        "AI TRAINING STOPPED",
+        "warn",
+      );
+    },
+  );
+
+  window.addEventListener(
+    "raytracer:controls-open",
+    () => {
+      setStatus(
+        "CONTROL",
+      );
+    },
+  );
+
+  window.addEventListener(
+    "raytracer:benchmark-open",
+    () => {
+      setStatus(
+        "BENCH",
+      );
+    },
+  );
+
+
+  /* =========================================================================
+     PRESET
+     ========================================================================= */
+
+  window.addEventListener(
+    "raytracer:preset",
+    (event) => {
+      const detail =
+        (
+          event as CustomEvent<{
+            preset?: unknown;
+          }>
+        ).detail;
+
+      if (
+        detail?.preset
+      ) {
+        message(
+          `PRESET ===> ${upper(
+            detail.preset,
+          )}`,
+          "ok",
+        );
+      }
+    },
+  );
+
+
+  /* =========================================================================
+     CONTROL FORWARDING
+     ========================================================================= */
+
+  window.addEventListener(
+    "raytracer:controls-command",
+    (event) => {
+      const detail =
+        (
+          event as CustomEvent<{
+            command?: unknown;
+          }>
+        ).detail;
+
+      if (
+        detail?.command
+      ) {
+        message(
+          `FORWARDED ===> ${String(
+            detail.command,
+          )}`,
+          "info",
+        );
+      }
+    },
+  );
+
+
+  /* =========================================================================
+     GPU / RENDERER
+     ========================================================================= */
+
+  window.addEventListener(
+    "raytracer:gpu",
+    (event) => {
+      const detail =
+        (
+          event as CustomEvent<
+            Record<
+              string,
+              unknown
+            >
+          >
+        ).detail ?? {};
+
+      if (
+        detail.available
+      ) {
+        message(
+          "GPU CAPABILITY DETECTED",
+          "ok",
+        );
+      }
+    },
+  );
+
+
+  /* =========================================================================
+     INITIAL STATE
+     ========================================================================= */
+
+  setConnection(
+    "INIT",
+    "wait",
+  );
+
+  setStatus(
+    "READY",
+  );
+
+  renderMainScreen();
+  updateClock();
+
+  window.setInterval(
+    updateClock,
+    1000,
+  );
+
+  window.setTimeout(
+    () => {
+      if (
+        !runtimeReady
+      ) {
+        message(
+          "WAITING FOR RUST WASM ENGINE",
+          "warn",
+        );
+      }
+    },
+    1500,
+  );
+</script>
+```

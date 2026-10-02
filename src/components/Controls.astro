@@ -1,0 +1,1936 @@
+---
+const { autoOpen = false } = Astro.props;
+---
+
+<section
+  id="controls"
+  class:list={{
+    controls: true,
+    "controls-visible": autoOpen,
+  }}
+  aria-hidden={!autoOpen}
+>
+  <div class="controls-shell">
+    <div class="member-header">
+      <div class="member-title">
+        <span class="cyan">RAYTRC.CONTROL</span>
+        <span class="gray">/</span>
+        <span class="white">AI-NAVIGATION</span>
+        <span class="gray">/</span>
+        <span class="green">COMMAND MEMBER</span>
+      </div>
+
+      <div class="member-state">
+        <span id="member-mode">MODE ===> READY</span>
+        <span id="member-dirty">DIRTY ===> NO</span>
+      </div>
+    </div>
+
+    <div class="command-strip">
+      <span class="command-label">COMMAND ===&gt;</span>
+      <input
+        id="command-input"
+        class="command-input"
+        type="text"
+        autocomplete="off"
+        autocapitalize="characters"
+        spellcheck="false"
+        value=""
+        aria-label="RayTracer command input"
+      />
+      <button id="command-submit" class="command-button" type="button">
+        EXEC
+      </button>
+    </div>
+
+    <div class="ruler">
+      <span>0001</span>
+      <span>....</span>
+      <span>+....1....+....2....+....3....+....4....+....5....+....6....+....7....+....8</span>
+      <span>COLS&gt;</span>
+    </div>
+
+    <div id="source-screen" class="source-screen" role="log" aria-live="polite"></div>
+
+    <div class="command-footer">
+      <div>
+        <span class="gray">COMMANDS:</span>
+        <span class="cyan">HELP</span>
+        <span class="cyan">STATUS</span>
+        <span class="cyan">RESET</span>
+        <span class="cyan">APPLY</span>
+        <span class="cyan">RUN</span>
+        <span class="cyan">VIEW</span>
+        <span class="cyan">BENCH</span>
+        <span class="cyan">AI</span>
+      </div>
+
+      <div>
+        <span class="gray">SCROLL ===&gt;</span>
+        <span class="white">CSR</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .controls {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    display: none;
+    background: #000;
+    color: #d0d0d0;
+    font-family:
+      "IBM Plex Mono",
+      "Courier New",
+      Consolas,
+      monospace;
+    font-size: 13px;
+    line-height: 1.35;
+  }
+
+  .controls.controls-visible {
+    display: block;
+  }
+
+  .controls-shell {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    grid-template-rows:
+      auto
+      auto
+      auto
+      minmax(0, 1fr)
+      auto;
+    background: #000;
+    overflow: hidden;
+  }
+
+  .member-header {
+    min-height: 34px;
+    padding: 6px 10px;
+    border-bottom: 1px solid #303030;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    background: #050505;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  .member-title,
+  .member-state {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+  }
+
+  .member-title {
+    overflow: hidden;
+    text-overflow: clip;
+  }
+
+  .member-state {
+    flex-shrink: 0;
+  }
+
+  .member-state #member-mode {
+    color: #00d400;
+  }
+
+  .member-state #member-dirty {
+    color: #ff2222;
+  }
+
+  .command-strip {
+    min-height: 34px;
+    padding: 5px 10px;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid #202020;
+    background: #000;
+  }
+
+  .command-label {
+    color: #00dddd;
+    white-space: nowrap;
+  }
+
+  .command-input {
+    width: 100%;
+    min-width: 0;
+    padding: 4px 7px;
+    border: 1px solid #303030;
+    outline: none;
+    background: #000;
+    color: #fff;
+    font: inherit;
+    text-transform: uppercase;
+    caret-color: #00d400;
+  }
+
+  .command-input:focus {
+    border-color: #00d400;
+    box-shadow: inset 0 0 0 1px #002800;
+  }
+
+  .command-input::selection {
+    background: #00d400;
+    color: #000;
+  }
+
+  .command-button {
+    min-width: 76px;
+    height: 26px;
+    padding: 0 10px;
+    border: 1px solid #00d400;
+    background: #000;
+    color: #00d400;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .command-button:hover {
+    background: #001d00;
+  }
+
+  .command-button:active {
+    background: #00d400;
+    color: #000;
+  }
+
+  .ruler {
+    min-height: 20px;
+    padding: 2px 10px;
+    display: grid;
+    grid-template-columns: 72px minmax(45px, auto) 1fr auto;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid #181818;
+    color: #606060;
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  .ruler > span:nth-child(3) {
+    overflow: hidden;
+    text-overflow: clip;
+  }
+
+  .source-screen {
+    min-height: 0;
+    overflow: auto;
+    padding: 7px 0 28px;
+    background: #000;
+    scrollbar-color: #303030 #000;
+    scrollbar-width: thin;
+  }
+
+  .source-line {
+    min-height: 18px;
+    display: grid;
+    grid-template-columns: 52px 18px 74px 110px minmax(0, 1fr);
+    align-items: baseline;
+    padding-right: 14px;
+    white-space: pre;
+  }
+
+  .source-line:hover {
+    background: #020e02;
+  }
+
+  .line-no {
+    padding-right: 8px;
+    text-align: right;
+    color: #404040;
+    user-select: none;
+  }
+
+  .level {
+    color: #404040;
+  }
+
+  .word {
+    color: #00d400;
+  }
+
+  .command {
+    color: #00dddd;
+  }
+
+  .value {
+    color: #fff;
+  }
+
+  .comment {
+    color: #585858;
+  }
+
+  .warning {
+    color: #ff2222;
+  }
+
+  .magenta {
+    color: #ff5fff;
+  }
+
+  .gray {
+    color: #606060;
+  }
+
+  .green {
+    color: #00d400;
+  }
+
+  .cyan {
+    color: #00dddd;
+  }
+
+  .white {
+    color: #fff;
+  }
+
+  .yellow {
+    color: #ffe600;
+  }
+
+  .red {
+    color: #ff2222;
+  }
+
+  .source-message {
+    padding: 2px 12px 2px 140px;
+    color: #c0c0c0;
+    white-space: pre-wrap;
+  }
+
+  .source-message.ok {
+    color: #00d400;
+  }
+
+  .source-message.info {
+    color: #00dddd;
+  }
+
+  .source-message.warn {
+    color: #ffe600;
+  }
+
+  .source-message.error {
+    color: #ff2222;
+  }
+
+  .command-footer {
+    min-height: 38px;
+    padding: 6px 10px;
+    border-top: 1px solid #303030;
+    background: #050505;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    color: #808080;
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  .command-footer > div:first-child {
+    display: flex;
+    gap: 8px;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .command-footer > div:first-child span {
+    flex-shrink: 0;
+  }
+
+  @media (max-width: 900px) {
+    .source-line {
+      grid-template-columns: 44px 15px 58px 88px minmax(0, 1fr);
+      padding-right: 8px;
+    }
+
+    .source-message {
+      padding-left: 105px;
+    }
+
+    .ruler {
+      grid-template-columns: 55px 35px minmax(0, 1fr) auto;
+    }
+
+    .member-header {
+      gap: 8px;
+    }
+
+    .member-title {
+      font-size: 11px;
+    }
+
+    .member-state {
+      font-size: 10px;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .command-strip {
+      grid-template-columns: 1fr auto;
+    }
+
+    .command-label {
+      grid-column: 1 / -1;
+    }
+
+    .command-input {
+      grid-column: 1;
+    }
+
+    .command-button {
+      grid-column: 2;
+    }
+
+    .source-line {
+      grid-template-columns: 42px 14px 52px 72px minmax(0, 1fr);
+      font-size: 11px;
+    }
+
+    .source-message {
+      padding-left: 78px;
+      font-size: 11px;
+    }
+
+    .command-footer {
+      display: block;
+      line-height: 1.8;
+    }
+
+    .command-footer > div:last-child {
+      display: none;
+    }
+  }
+</style>
+
+<script>
+  type ControlState = {
+    width: number;
+    height: number;
+    samples: number;
+    bounces: number;
+    accumulation: boolean;
+    exposure: number;
+
+    cameraX: number;
+    cameraY: number;
+    cameraZ: number;
+    cameraFov: number;
+    cameraPitch: number;
+    cameraYaw: number;
+
+    lightX: number;
+    lightY: number;
+    lightZ: number;
+    lightPower: number;
+
+    roughness: number;
+    metallic: number;
+    ior: number;
+    materialId: number;
+
+    scene: string;
+    objects: number;
+    bvh: string;
+
+    difficulty: number;
+    obstacles: number;
+    episodeSteps: number;
+
+    learningRate: number;
+    gamma: number;
+    batchSize: number;
+    epsilon: number;
+    epsilonMin: number;
+    epsilonDecay: number;
+    targetUpdate: number;
+
+    trainChunk: number;
+  };
+
+  type EventDetail = Record<string, unknown>;
+
+  const DEFAULT_STATE: ControlState = {
+    width: 1280,
+    height: 720,
+    samples: 64,
+    bounces: 4,
+    accumulation: true,
+    exposure: 1,
+
+    cameraX: 0,
+    cameraY: 1.5,
+    cameraZ: 5,
+    cameraFov: 45,
+    cameraPitch: 0,
+    cameraYaw: 0,
+
+    lightX: 20,
+    lightY: 100,
+    lightZ: 10,
+    lightPower: 500,
+
+    roughness: 0.2,
+    metallic: 0,
+    ior: 1.5,
+    materialId: 1,
+
+    scene: "DEFAULT",
+    objects: 3,
+    bvh: "AUTO",
+
+    difficulty: 3,
+    obstacles: 12,
+    episodeSteps: 1000,
+
+    learningRate: 0.001,
+    gamma: 0.99,
+    batchSize: 64,
+    epsilon: 1.0,
+    epsilonMin: 0.05,
+    epsilonDecay: 0.995,
+    targetUpdate: 1000,
+
+    trainChunk: 250,
+  };
+
+  const state: ControlState = structuredClone(DEFAULT_STATE);
+
+  let dirty = false;
+  let commandStatus = "READY";
+  let memberMode = "READY";
+  let lastMessage = "CONTROL MEMBER READY";
+
+  const sourceScreen = document.getElementById("source-screen");
+  const commandInput = document.getElementById(
+    "command-input",
+  ) as HTMLInputElement | null;
+  const commandSubmit = document.getElementById(
+    "command-submit",
+  ) as HTMLButtonElement | null;
+  const memberModeElement = document.getElementById("member-mode");
+  const memberDirtyElement = document.getElementById("member-dirty");
+
+  if (!sourceScreen || !commandInput || !commandSubmit) {
+    throw new Error("RAYTRC.CONTROL DOM initialization failed");
+  }
+
+  const commandHistory: string[] = [];
+  let historyIndex = -1;
+
+  function cloneState(source: ControlState): ControlState {
+    return JSON.parse(JSON.stringify(source));
+  }
+
+  function pad(value: number, length: number): string {
+    return String(value).padStart(length, "0");
+  }
+
+  function fixed(value: number, digits = 3): string {
+    return Number.isFinite(value) ? value.toFixed(digits) : "0";
+  }
+
+  function upper(value: unknown): string {
+    return String(value ?? "")
+      .trim()
+      .toUpperCase();
+  }
+
+  function boolText(value: boolean): string {
+    return value ? "ON" : "OFF";
+  }
+
+  function clampNumber(
+    value: number,
+    min: number,
+    max: number,
+    fallback: number,
+  ): number {
+    if (!Number.isFinite(value)) return fallback;
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function integerValue(
+    token: string | undefined,
+    min: number,
+    max: number,
+    fallback: number,
+  ): number {
+    const value = Number.parseInt(token ?? "", 10);
+    if (!Number.isFinite(value)) return fallback;
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function floatValue(
+    token: string | undefined,
+    min: number,
+    max: number,
+    fallback: number,
+  ): number {
+    const value = Number.parseFloat(token ?? "");
+    if (!Number.isFinite(value)) return fallback;
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function dispatch(name: string, detail: EventDetail = {}): void {
+    window.dispatchEvent(
+      new CustomEvent(name, {
+        detail,
+      }),
+    );
+  }
+
+  function markDirty(value = true): void {
+    dirty = value;
+    memberDirtyElement!.textContent = `DIRTY ===> ${dirty ? "YES" : "NO"}`;
+    memberDirtyElement!.className = dirty ? "red" : "green";
+  }
+
+  function setMode(mode: string): void {
+    memberMode = mode;
+    memberModeElement!.textContent = `MODE ===> ${mode}`;
+  }
+
+  function setStatus(status: string): void {
+    commandStatus = status;
+    lastMessage = status;
+  }
+
+  function writeMessage(
+    message: string,
+    tone: "plain" | "ok" | "info" | "warn" | "error" = "plain",
+  ): void {
+    const node = document.createElement("div");
+    node.className = `source-message ${tone}`;
+    node.textContent = message;
+    sourceScreen!.appendChild(node);
+    sourceScreen!.scrollTop = sourceScreen!.scrollHeight;
+    lastMessage = message;
+  }
+
+  function line(
+    number: number,
+    level: string,
+    word: string,
+    command: string,
+    value: string,
+  ): void {
+    const row = document.createElement("div");
+    row.className = "source-line";
+
+    row.innerHTML = `
+      <span class="line-no">${pad(number, 4)}</span>
+      <span class="level">${level}</span>
+      <span class="word">${word}</span>
+      <span class="command">${command}</span>
+      <span class="value">${value}</span>
+    `;
+
+    sourceScreen!.appendChild(row);
+  }
+
+  function comment(
+    number: number,
+    text: string,
+    tone: "comment" | "warning" = "comment",
+  ): void {
+    const row = document.createElement("div");
+    row.className = "source-line";
+
+    row.innerHTML = `
+      <span class="line-no">${pad(number, 4)}</span>
+      <span class="level"></span>
+      <span class="${tone === "warning" ? "warning" : "comment"}">*> </span>
+      <span class="${tone === "warning" ? "warning" : "comment"}"></span>
+      <span class="${tone === "warning" ? "warning" : "comment"}">${text}</span>
+    `;
+
+    sourceScreen!.appendChild(row);
+  }
+
+  function refreshSource(message?: string): void {
+    sourceScreen!.innerHTML = "";
+
+    line(10, "01", "MODULE", "NAME", "RAYTRC.CONTROL");
+    line(20, "05", "MODE", "VALUE", memberMode);
+    line(30, "05", "DIRTY", "STATE", dirty ? "YES" : "NO");
+
+    comment(40, "------------------------------------------------------------");
+    comment(50, "RENDER CONFIGURATION");
+
+    line(60, "10", "RENDER", "WIDTH", pad(state.width, 6));
+    line(70, "10", "RENDER", "HEIGHT", pad(state.height, 6));
+    line(80, "10", "RENDER", "SAMPLES", pad(state.samples, 6));
+    line(90, "10", "RENDER", "BOUNCES", pad(state.bounces, 6));
+    line(
+      100,
+      "10",
+      "RENDER",
+      "ACCUMULATION",
+      boolText(state.accumulation),
+    );
+    line(110, "10", "RENDER", "EXPOSURE", fixed(state.exposure, 3));
+
+    comment(120, "CAMERA");
+
+    line(130, "10", "CAMERA", "POSITION", [
+      fixed(state.cameraX, 3),
+      fixed(state.cameraY, 3),
+      fixed(state.cameraZ, 3),
+    ].join(" "));
+    line(140, "10", "CAMERA", "FOV", fixed(state.cameraFov, 2));
+    line(150, "10", "CAMERA", "PITCH", fixed(state.cameraPitch, 2));
+    line(160, "10", "CAMERA", "YAW", fixed(state.cameraYaw, 2));
+
+    comment(170, "LIGHT");
+
+    line(180, "10", "LIGHT", "POSITION", [
+      fixed(state.lightX, 2),
+      fixed(state.lightY, 2),
+      fixed(state.lightZ, 2),
+    ].join(" "));
+    line(190, "10", "LIGHT", "POWER", fixed(state.lightPower, 2));
+
+    comment(200, "MATERIAL");
+
+    line(210, "10", "MATERIAL", "ROUGHNESS", fixed(state.roughness, 3));
+    line(220, "10", "MATERIAL", "METALLIC", fixed(state.metallic, 3));
+    line(230, "10", "MATERIAL", "IOR", fixed(state.ior, 3));
+    line(240, "10", "MATERIAL", "ID", String(state.materialId));
+
+    comment(250, "SCENE");
+
+    line(260, "10", "SCENE", "NAME", state.scene);
+    line(270, "10", "SCENE", "OBJECTS", pad(state.objects, 4));
+    line(280, "10", "SCENE", "BVH", state.bvh);
+
+    comment(290, "------------------------------------------------------------");
+    comment(300, "AI NAVIGATION ENVIRONMENT");
+
+    line(310, "10", "AI", "DIFFICULTY", pad(state.difficulty, 2));
+    line(320, "10", "AI", "OBSTACLES", pad(state.obstacles, 3));
+    line(330, "10", "AI", "EPISODE-STEPS", pad(state.episodeSteps, 5));
+
+    comment(340, "AI TRAINER");
+
+    line(
+      350,
+      "10",
+      "TRAIN",
+      "LEARNING-RATE",
+      fixed(state.learningRate, 6),
+    );
+    line(360, "10", "TRAIN", "GAMMA", fixed(state.gamma, 5));
+    line(370, "10", "TRAIN", "BATCH-SIZE", pad(state.batchSize, 4));
+    line(380, "10", "TRAIN", "EPSILON", fixed(state.epsilon, 5));
+    line(390, "10", "TRAIN", "EPSILON-MIN", fixed(state.epsilonMin, 5));
+    line(400, "10", "TRAIN", "EPSILON-DECAY", fixed(state.epsilonDecay, 5));
+    line(410, "10", "TRAIN", "TARGET-UPDATE", pad(state.targetUpdate, 5));
+    line(420, "10", "TRAIN", "CHUNK", pad(state.trainChunk, 5));
+
+    comment(430, "------------------------------------------------------------");
+    comment(440, "AI COMMANDS");
+    line(450, "10", "AI", "TRAIN", "AI TRAIN <STEPS>");
+    line(460, "10", "AI", "EPISODES", "AI EPISODES <COUNT>");
+    line(470, "10", "AI", "STEP", "AI STEP");
+    line(480, "10", "AI", "EVAL", "AI EVAL <COUNT>");
+    line(490, "10", "AI", "RESET", "AI RESET");
+    line(500, "10", "AI", "ENV-RESET", "AI ENV RESET [SEED]");
+    line(510, "10", "AI", "HARD-RESET", "AI HARD RESET");
+    line(520, "10", "AI", "STATUS", "AI STATUS");
+    line(530, "10", "AI", "MODEL", "SAVE MODEL / LOAD MODEL");
+
+    comment(540, "------------------------------------------------------------");
+
+    line(550, "05", "STATUS", "COMMAND", commandStatus);
+    line(560, "05", "STATUS", "MESSAGE", lastMessage);
+
+    if (message) {
+      writeMessage(message, "info");
+    }
+  }
+
+  function resetStateOnly(): void {
+    Object.assign(state, cloneState(DEFAULT_STATE));
+    markDirty(false);
+    setMode("READY");
+    setStatus("RESET COMPLETE");
+
+    dispatch("raytracer:controls-reset", {
+      state: cloneState(state),
+    });
+
+    dispatch("raytracer:controls", {
+      state: cloneState(state),
+      changed: ["ALL"],
+      source: "controls-reset",
+    });
+
+    refreshSource();
+    writeMessage("CONTROL STATE RESET COMPLETE", "ok");
+  }
+
+  function emitControls(changed: string[] = []): void {
+    dispatch("raytracer:controls", {
+      state: cloneState(state),
+      changed,
+      dirty,
+      source: "controls",
+    });
+
+    dispatch("raytracer:controls-apply", {
+      state: cloneState(state),
+      changed,
+    });
+  }
+
+  function emitAI(action: string, extra: EventDetail = {}): void {
+    const detail = {
+      action,
+      state: cloneState(state),
+      ...extra,
+    };
+
+    dispatch("raytracer:ai", detail);
+    dispatch("raytracer:ai-command", detail);
+  }
+
+  function execute(commandLine: string): boolean {
+    const raw = commandLine.trim();
+
+    if (!raw) {
+      writeMessage("COMMAND ===> EMPTY", "warn");
+      return false;
+    }
+
+    const command = raw.toUpperCase();
+    commandHistory.unshift(raw);
+    if (commandHistory.length > 100) {
+      commandHistory.length = 100;
+    }
+    historyIndex = -1;
+
+    const tokens = command.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+    const primary = tokens[0] ?? "";
+    const secondary = tokens[1] ?? "";
+    const tertiary = tokens[2] ?? "";
+    const fourth = tokens[3] ?? "";
+
+    if (primary === "HELP" || primary === "?") {
+      showHelp();
+      return true;
+    }
+
+    if (primary === "EXIT" || primary === "CLOSE") {
+      dispatch("raytracer:controls-close");
+      dispatch("raytracer:command", {
+        command,
+      });
+
+      setStatus("CLOSE REQUESTED");
+      refreshSource();
+      writeMessage("CONTROL MEMBER CLOSE REQUESTED", "info");
+      return true;
+    }
+
+    if (primary === "CLS" || primary === "CLEAR") {
+      sourceScreen!.innerHTML = "";
+      writeMessage("SCREEN CLEARED", "ok");
+      return true;
+    }
+
+    if (primary === "STATUS") {
+      emitStatus();
+      return true;
+    }
+
+    if (primary === "RESET") {
+      if (secondary === "AI") {
+        emitAI("RESET_AI");
+        setStatus("AI RESET REQUESTED");
+        refreshSource();
+        writeMessage("AI RESET REQUESTED", "ok");
+        return true;
+      }
+
+      if (secondary === "ENV" || secondary === "ENVIRONMENT") {
+        const seed =
+          tokens[2] && Number.isFinite(Number(tokens[2]))
+            ? Number(tokens[2])
+            : undefined;
+
+        emitAI("RESET_ENVIRONMENT", {
+          seed,
+        });
+
+        setStatus("ENVIRONMENT RESET REQUESTED");
+        refreshSource();
+        writeMessage(
+          `AI ENVIRONMENT RESET ${seed === undefined ? "AUTO SEED" : `SEED ${seed}`}`,
+          "ok",
+        );
+        return true;
+      }
+
+      if (secondary === "HARD") {
+        emitAI("HARD_RESET");
+        resetStateOnly();
+        writeMessage("AI + ENVIRONMENT + CONTROL STATE RESET", "ok");
+        return true;
+      }
+
+      resetStateOnly();
+      return true;
+    }
+
+    if (primary === "APPLY") {
+      markDirty(false);
+      setMode("APPLIED");
+      setStatus("APPLIED");
+
+      emitControls(Object.keys(state));
+
+      dispatch("raytracer:controls-applied", {
+        state: cloneState(state),
+      });
+
+      refreshSource();
+      writeMessage("CONTROL STATE APPLIED", "ok");
+      return true;
+    }
+
+    if (primary === "RUN") {
+      markDirty(false);
+      setMode("RUN");
+      setStatus("RUN REQUESTED");
+
+      dispatch("raytracer:run", {
+        state: cloneState(state),
+      });
+
+      emitAI("RUN");
+
+      refreshSource();
+      writeMessage("RENDER + AI RUN REQUESTED", "ok");
+      return true;
+    }
+
+    if (primary === "RENDER") {
+      markDirty(false);
+      setMode("RENDER");
+      setStatus("RENDER REQUESTED");
+
+      dispatch("raytracer:render-request", {
+        state: cloneState(state),
+      });
+
+      refreshSource();
+      writeMessage("RENDER REQUESTED", "ok");
+      return true;
+    }
+
+    if (primary === "STOP") {
+      setMode("STOP");
+      setStatus("STOP REQUESTED");
+
+      dispatch("raytracer:stop", {
+        source: "controls",
+      });
+
+      emitAI("STOP");
+
+      refreshSource();
+      writeMessage("STOP REQUEST SENT", "warn");
+      return true;
+    }
+
+    if (primary === "VIEW") {
+      setMode("VIEW");
+      setStatus("VIEW REQUESTED");
+
+      dispatch("raytracer:view", {
+        state: cloneState(state),
+      });
+
+      refreshSource();
+      writeMessage("VIEW REQUESTED", "info");
+      return true;
+    }
+
+    if (primary === "BENCH") {
+      setMode("BENCH");
+      setStatus("BENCHMARK REQUESTED");
+
+      dispatch("raytracer:bench", {
+        state: cloneState(state),
+      });
+
+      refreshSource();
+      writeMessage("BENCHMARK REQUESTED", "info");
+      return true;
+    }
+
+    if (primary === "AI") {
+      return executeAI(tokens.slice(1));
+    }
+
+    if (primary === "SAVE" && secondary === "MODEL") {
+      emitAI("SAVE_MODEL");
+      setStatus("SAVE MODEL REQUESTED");
+      refreshSource();
+      writeMessage("MODEL SAVE REQUESTED", "ok");
+      return true;
+    }
+
+    if (primary === "LOAD" && secondary === "MODEL") {
+      emitAI("LOAD_MODEL");
+      setStatus("LOAD MODEL REQUESTED");
+      refreshSource();
+      writeMessage("MODEL LOAD REQUESTED", "info");
+      return true;
+    }
+
+    if (primary === "EXPORT" && secondary === "MODEL") {
+      emitAI("EXPORT_MODEL");
+      setStatus("EXPORT MODEL REQUESTED");
+      refreshSource();
+      writeMessage("MODEL EXPORT REQUESTED", "info");
+      return true;
+    }
+
+    if (primary === "IMPORT" && secondary === "MODEL") {
+      emitAI("IMPORT_MODEL");
+      setStatus("IMPORT MODEL REQUESTED");
+      refreshSource();
+      writeMessage("MODEL IMPORT REQUESTED", "info");
+      return true;
+    }
+
+    if (primary === "SET") {
+      return executeSet(tokens.slice(1));
+    }
+
+    if (primary === "PRESET") {
+      return executePreset(secondary);
+    }
+
+    writeMessage(`INVALID COMMAND ===> ${raw}`, "error");
+    setStatus("INVALID COMMAND");
+    refreshSource();
+    return false;
+  }
+
+  function executeAI(args: string[]): boolean {
+    const action = upper(args[0]);
+
+    if (!action || action === "HELP" || action === "?") {
+      showAIHelp();
+      return true;
+    }
+
+    if (action === "STATUS") {
+      emitAI("STATUS");
+      setMode("AI");
+      setStatus("AI STATUS REQUESTED");
+      refreshSource();
+      writeMessage("AI STATUS REQUESTED", "info");
+      return true;
+    }
+
+    if (action === "STEP") {
+      emitAI("STEP");
+      setMode("AI-STEP");
+      setStatus("AI STEP REQUESTED");
+      refreshSource();
+      writeMessage("AI SINGLE STEP REQUESTED", "ok");
+      return true;
+    }
+
+    if (action === "TRAIN" || action === "STEPS") {
+      const requested = integerValue(
+        args[1],
+        1,
+        1_000_000,
+        state.trainChunk,
+      );
+
+      emitAI("TRAIN_STEPS", {
+        count: requested,
+      });
+
+      setMode("AI-TRAIN");
+      setStatus(`AI TRAIN ${requested} STEPS`);
+      refreshSource();
+      writeMessage(
+        `AI TRAIN REQUESTED / STEPS ${pad(requested, 6)}`,
+        "ok",
+      );
+      return true;
+    }
+
+    if (
+      action === "EPISODES" ||
+      action === "EPISODE" ||
+      action === "TRAIN-EPISODES"
+    ) {
+      const requested = integerValue(args[1], 1, 100_000, 1);
+
+      emitAI("TRAIN_EPISODES", {
+        count: requested,
+      });
+
+      setMode("AI-EPISODES");
+      setStatus(`AI EPISODES ${requested}`);
+      refreshSource();
+      writeMessage(
+        `AI EPISODE TRAINING REQUESTED / COUNT ${pad(requested, 5)}`,
+        "ok",
+      );
+      return true;
+    }
+
+    if (action === "EVAL" || action === "EVALUATE") {
+      const requested = integerValue(args[1], 1, 10_000, 10);
+
+      emitAI("EVALUATE", {
+        count: requested,
+      });
+
+      setMode("AI-EVAL");
+      setStatus(`AI EVAL ${requested}`);
+      refreshSource();
+      writeMessage(
+        `AI EVALUATION REQUESTED / EPISODES ${pad(requested, 5)}`,
+        "info",
+      );
+      return true;
+    }
+
+    if (action === "RESET") {
+      emitAI("RESET_AI");
+      setMode("AI-RESET");
+      setStatus("AI RESET REQUESTED");
+      refreshSource();
+      writeMessage(
+        "AI WEIGHTS + REPLAY + EXPLORATION RESET REQUESTED",
+        "ok",
+      );
+      return true;
+    }
+
+    if (action === "ENV" || action === "ENVIRONMENT") {
+      const envAction = upper(args[1]);
+
+      if (envAction === "RESET") {
+        const parsedSeed = Number(args[2]);
+        const seed =
+          Number.isFinite(parsedSeed) && parsedSeed >= 0
+            ? parsedSeed
+            : undefined;
+
+        emitAI("RESET_ENVIRONMENT", {
+          seed,
+        });
+
+        setMode("AI-ENV");
+        setStatus("ENV RESET REQUESTED");
+        refreshSource();
+        writeMessage(
+          `ENVIRONMENT RESET REQUESTED / ${seed === undefined ? "AUTO SEED" : `SEED ${seed}`}`,
+          "ok",
+        );
+        return true;
+      }
+    }
+
+    if (action === "HARD" || action === "HARD-RESET") {
+      emitAI("HARD_RESET");
+      setMode("AI-HARD");
+      setStatus("AI HARD RESET REQUESTED");
+      refreshSource();
+      writeMessage(
+        "HARD RESET REQUESTED / AI + ENVIRONMENT",
+        "warn",
+      );
+      return true;
+    }
+
+    if (action === "MODEL") {
+      const modelAction = upper(args[1]);
+
+      if (modelAction === "SAVE") {
+        emitAI("SAVE_MODEL");
+        setStatus("SAVE MODEL REQUESTED");
+        refreshSource();
+        writeMessage("MODEL SAVE REQUESTED", "ok");
+        return true;
+      }
+
+      if (modelAction === "LOAD") {
+        emitAI("LOAD_MODEL");
+        setStatus("LOAD MODEL REQUESTED");
+        refreshSource();
+        writeMessage("MODEL LOAD REQUESTED", "info");
+        return true;
+      }
+
+      if (modelAction === "EXPORT") {
+        emitAI("EXPORT_MODEL");
+        setStatus("EXPORT MODEL REQUESTED");
+        refreshSource();
+        writeMessage("MODEL EXPORT REQUESTED", "info");
+        return true;
+      }
+
+      if (modelAction === "IMPORT") {
+        emitAI("IMPORT_MODEL");
+        setStatus("IMPORT MODEL REQUESTED");
+        refreshSource();
+        writeMessage("MODEL IMPORT REQUESTED", "info");
+        return true;
+      }
+    }
+
+    writeMessage(
+      `INVALID AI COMMAND ===> AI ${args.join(" ")}`,
+      "error",
+    );
+    setStatus("INVALID AI COMMAND");
+    refreshSource();
+    return false;
+  }
+
+  function executeSet(args: string[]): boolean {
+    const key = upper(args[0]);
+
+    if (!key) {
+      writeMessage("SET COMMAND REQUIRES A PARAMETER", "error");
+      return false;
+    }
+
+    const changed: string[] = [];
+
+    switch (key) {
+      case "WIDTH":
+        state.width = integerValue(args[1], 1, 16_384, state.width);
+        changed.push("width");
+        break;
+
+      case "HEIGHT":
+        state.height = integerValue(args[1], 1, 16_384, state.height);
+        changed.push("height");
+        break;
+
+      case "SAMPLES":
+        state.samples = integerValue(args[1], 1, 1_000_000, state.samples);
+        changed.push("samples");
+        break;
+
+      case "BOUNCES":
+        state.bounces = integerValue(args[1], 1, 128, state.bounces);
+        changed.push("bounces");
+        break;
+
+      case "ACCUMULATION":
+        state.accumulation = parseOnOff(args[1], state.accumulation);
+        changed.push("accumulation");
+        break;
+
+      case "EXPOSURE":
+        state.exposure = floatValue(args[1], 0, 32, state.exposure);
+        changed.push("exposure");
+        break;
+
+      case "CAMERA":
+        state.cameraX = Number.parseFloat(args[1] ?? String(state.cameraX));
+        state.cameraY = Number.parseFloat(args[2] ?? String(state.cameraY));
+        state.cameraZ = Number.parseFloat(args[3] ?? String(state.cameraZ));
+        state.cameraFov = floatValue(
+          args[4],
+          1,
+          179,
+          state.cameraFov,
+        );
+        changed.push("camera");
+        break;
+
+      case "CAMERA-POS":
+      case "CAMERAPOS":
+        state.cameraX = Number.parseFloat(args[1] ?? String(state.cameraX));
+        state.cameraY = Number.parseFloat(args[2] ?? String(state.cameraY));
+        state.cameraZ = Number.parseFloat(args[3] ?? String(state.cameraZ));
+        changed.push("camera-position");
+        break;
+
+      case "CAMERA-ROT":
+      case "CAMERAROT":
+        state.cameraPitch = Number.parseFloat(
+          args[1] ?? String(state.cameraPitch),
+        );
+        state.cameraYaw = Number.parseFloat(
+          args[2] ?? String(state.cameraYaw),
+        );
+        changed.push("camera-rotation");
+        break;
+
+      case "LIGHT":
+        state.lightX = Number.parseFloat(args[1] ?? String(state.lightX));
+        state.lightY = Number.parseFloat(args[2] ?? String(state.lightY));
+        state.lightZ = Number.parseFloat(args[3] ?? String(state.lightZ));
+        state.lightPower = floatValue(
+          args[4],
+          0,
+          1_000_000,
+          state.lightPower,
+        );
+        changed.push("light");
+        break;
+
+      case "ROUGHNESS":
+      case "ROUGH":
+        state.roughness = floatValue(args[1], 0, 1, state.roughness);
+        changed.push("roughness");
+        break;
+
+      case "METALLIC":
+      case "METAL":
+        state.metallic = floatValue(args[1], 0, 1, state.metallic);
+        changed.push("metallic");
+        break;
+
+      case "IOR":
+        state.ior = floatValue(args[1], 1, 4, state.ior);
+        changed.push("ior");
+        break;
+
+      case "SCENE":
+        state.scene = sanitizeValue(args.slice(1).join("_")) || state.scene;
+        changed.push("scene");
+        break;
+
+      case "OBJECTS":
+        state.objects = integerValue(args[1], 0, 10_000, state.objects);
+        changed.push("objects");
+        break;
+
+      case "BVH": {
+        const value = upper(args[1]);
+
+        if (value === "AUTO" || value === "ON" || value === "OFF") {
+          state.bvh = value;
+        }
+
+        changed.push("bvh");
+        break;
+      }
+
+      case "DIFFICULTY":
+        state.difficulty = integerValue(
+          args[1],
+          1,
+          10,
+          state.difficulty,
+        );
+        changed.push("difficulty");
+        break;
+
+      case "OBSTACLES":
+      case "OBSTACLE":
+        state.obstacles = integerValue(
+          args[1],
+          0,
+          256,
+          state.obstacles,
+        );
+        changed.push("obstacles");
+        break;
+
+      case "EPISODE-STEPS":
+      case "EPISODE_STEPS":
+      case "MAX-STEPS":
+      case "MAX_STEPS":
+        state.episodeSteps = integerValue(
+          args[1],
+          1,
+          100_000,
+          state.episodeSteps,
+        );
+        changed.push("episodeSteps");
+        break;
+
+      case "LR":
+      case "LEARNING-RATE":
+      case "LEARNING_RATE":
+        state.learningRate = floatValue(
+          args[1],
+          0.0000001,
+          1,
+          state.learningRate,
+        );
+        changed.push("learningRate");
+        break;
+
+      case "GAMMA":
+        state.gamma = floatValue(args[1], 0, 0.99999, state.gamma);
+        changed.push("gamma");
+        break;
+
+      case "BATCH":
+      case "BATCH-SIZE":
+      case "BATCH_SIZE":
+        state.batchSize = integerValue(
+          args[1],
+          1,
+          2048,
+          state.batchSize,
+        );
+        changed.push("batchSize");
+        break;
+
+      case "EPSILON":
+        state.epsilon = floatValue(args[1], 0, 1, state.epsilon);
+        changed.push("epsilon");
+        break;
+
+      case "EPSILON-MIN":
+      case "EPSILON_MIN":
+        state.epsilonMin = floatValue(
+          args[1],
+          0,
+          1,
+          state.epsilonMin,
+        );
+        changed.push("epsilonMin");
+        break;
+
+      case "EPSILON-DECAY":
+      case "EPSILON_DECAY":
+        state.epsilonDecay = floatValue(
+          args[1],
+          0.000001,
+          1,
+          state.epsilonDecay,
+        );
+        changed.push("epsilonDecay");
+        break;
+
+      case "TARGET-UPDATE":
+      case "TARGET_UPDATE":
+        state.targetUpdate = integerValue(
+          args[1],
+          1,
+          1_000_000,
+          state.targetUpdate,
+        );
+        changed.push("targetUpdate");
+        break;
+
+      case "CHUNK":
+      case "TRAIN-CHUNK":
+      case "TRAIN_CHUNK":
+        state.trainChunk = integerValue(
+          args[1],
+          1,
+          100_000,
+          state.trainChunk,
+        );
+        changed.push("trainChunk");
+        break;
+
+      default:
+        writeMessage(`UNKNOWN SET PARAMETER ===> ${key}`, "error");
+        setStatus("INVALID SET PARAMETER");
+        refreshSource();
+        return false;
+    }
+
+    for (const keyName of Object.keys(state)) {
+      const value = state[keyName as keyof ControlState];
+
+      if (typeof value === "number" && !Number.isFinite(value)) {
+        Object.assign(state, cloneState(DEFAULT_STATE));
+        markDirty(false);
+        setStatus("INVALID NUMERIC VALUE");
+        refreshSource();
+        writeMessage(
+          `INVALID NUMERIC VALUE / ${keyName}`,
+          "error",
+        );
+        return false;
+      }
+    }
+
+    markDirty(true);
+    setMode("EDIT");
+    setStatus(`CHANGED ${changed.join(",")}`);
+
+    refreshSource();
+
+    writeMessage(
+      `UPDATED ===> ${changed.join(", ").toUpperCase()}`,
+      "ok",
+    );
+
+    return true;
+  }
+
+  function executePreset(name: string): boolean {
+    const preset = upper(name);
+
+    if (
+      !["DRAFT", "PREVIEW", "FINAL", "ULTRA", "AI", "TRAINING"].includes(
+        preset,
+      )
+    ) {
+      writeMessage(`UNKNOWN PRESET ===> ${preset}`, "error");
+      return false;
+    }
+
+    if (preset === "DRAFT") {
+      state.width = 640;
+      state.height = 360;
+      state.samples = 8;
+      state.bounces = 2;
+      state.accumulation = true;
+      state.exposure = 1;
+    }
+
+    if (preset === "PREVIEW") {
+      state.width = 960;
+      state.height = 540;
+      state.samples = 16;
+      state.bounces = 3;
+      state.accumulation = true;
+      state.exposure = 1;
+    }
+
+    if (preset === "FINAL") {
+      state.width = 1920;
+      state.height = 1080;
+      state.samples = 128;
+      state.bounces = 8;
+      state.accumulation = true;
+      state.exposure = 1;
+    }
+
+    if (preset === "ULTRA") {
+      state.width = 3840;
+      state.height = 2160;
+      state.samples = 512;
+      state.bounces = 16;
+      state.accumulation = true;
+      state.exposure = 1;
+    }
+
+    if (preset === "AI" || preset === "TRAINING") {
+      state.difficulty = 3;
+      state.obstacles = 12;
+      state.episodeSteps = 1000;
+
+      state.learningRate = 0.001;
+      state.gamma = 0.99;
+      state.batchSize = 64;
+      state.epsilon = 1.0;
+      state.epsilonMin = 0.05;
+      state.epsilonDecay = 0.995;
+      state.targetUpdate = 1000;
+      state.trainChunk = 250;
+    }
+
+    markDirty(true);
+    setMode(`PRESET-${preset}`);
+    setStatus(`PRESET ${preset}`);
+    refreshSource();
+
+    dispatch("raytracer:preset", {
+      preset,
+      state: cloneState(state),
+    });
+
+    emitControls(["PRESET"]);
+
+    writeMessage(`PRESET ${preset} LOADED`, "ok");
+    return true;
+  }
+
+  function parseOnOff(
+    token: string | undefined,
+    fallback: boolean,
+  ): boolean {
+    const value = upper(token);
+
+    if (value === "ON" || value === "TRUE" || value === "1") {
+      return true;
+    }
+
+    if (value === "OFF" || value === "FALSE" || value === "0") {
+      return false;
+    }
+
+    return fallback;
+  }
+
+  function sanitizeValue(value: string): string {
+    return value
+      .replace(/^["']|["']$/g, "")
+      .replace(/[^A-Z0-9_.-]+/gi, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 64)
+      .toUpperCase();
+  }
+
+  function emitStatus(): void {
+    dispatch("raytracer:controls-status", {
+      state: cloneState(state),
+      dirty,
+      mode: memberMode,
+      status: commandStatus,
+    });
+
+    emitAI("STATUS", {
+      source: "controls-status",
+    });
+
+    setMode("STATUS");
+    setStatus("STATUS REQUESTED");
+    refreshSource();
+    writeMessage("STATUS REQUESTED", "info");
+  }
+
+  function showHelp(): void {
+    sourceScreen!.innerHTML = "";
+
+    line(10, "01", "HELP", "MEMBER", "RAYTRC.CONTROL");
+    comment(20, "------------------------------------------------------------");
+
+    line(30, "10", "CMD", "STATUS", "STATUS");
+    line(40, "10", "CMD", "RESET", "RESET");
+    line(50, "10", "CMD", "APPLY", "APPLY");
+    line(60, "10", "CMD", "RUN", "RUN");
+    line(70, "10", "CMD", "RENDER", "RENDER");
+    line(80, "10", "CMD", "STOP", "STOP");
+    line(90, "10", "CMD", "VIEW", "VIEW");
+    line(100, "10", "CMD", "BENCH", "BENCH");
+
+    comment(110, "RENDER:");
+    line(120, "10", "SET", "WIDTH", "SET WIDTH N");
+    line(130, "10", "SET", "HEIGHT", "SET HEIGHT N");
+    line(140, "10", "SET", "SAMPLES", "SET SAMPLES N");
+    line(150, "10", "SET", "BOUNCES", "SET BOUNCES N");
+    line(160, "10", "SET", "ACCUMULATION", "SET ACCUMULATION ON|OFF");
+    line(170, "10", "SET", "EXPOSURE", "SET EXPOSURE N");
+
+    comment(180, "CAMERA / MATERIAL / SCENE:");
+    line(190, "10", "SET", "CAMERA", "SET CAMERA X Y Z FOV");
+    line(200, "10", "SET", "CAMERA-POS", "SET CAMERA-POS X Y Z");
+    line(210, "10", "SET", "CAMERA-ROT", "SET CAMERA-ROT PITCH YAW");
+    line(220, "10", "SET", "LIGHT", "SET LIGHT X Y Z POWER");
+    line(230, "10", "SET", "ROUGHNESS", "SET ROUGHNESS N");
+    line(240, "10", "SET", "METALLIC", "SET METALLIC N");
+    line(250, "10", "SET", "IOR", "SET IOR N");
+    line(260, "10", "SET", "SCENE", "SET SCENE NAME");
+    line(270, "10", "SET", "OBJECTS", "SET OBJECTS N");
+    line(280, "10", "SET", "BVH", "SET BVH AUTO|ON|OFF");
+
+    comment(290, "AI ENVIRONMENT:");
+    line(300, "10", "SET", "DIFFICULTY", "SET DIFFICULTY 1..10");
+    line(310, "10", "SET", "OBSTACLES", "SET OBSTACLES N");
+    line(320, "10", "SET", "EPISODE-STEPS", "SET EPISODE-STEPS N");
+
+    comment(330, "AI TRAINER:");
+    line(340, "10", "SET", "LR", "SET LR N");
+    line(350, "10", "SET", "GAMMA", "SET GAMMA N");
+    line(360, "10", "SET", "BATCH", "SET BATCH N");
+    line(370, "10", "SET", "EPSILON", "SET EPSILON N");
+    line(380, "10", "SET", "EPSILON-MIN", "SET EPSILON-MIN N");
+    line(390, "10", "SET", "EPSILON-DECAY", "SET EPSILON-DECAY N");
+    line(400, "10", "SET", "TARGET-UPDATE", "SET TARGET-UPDATE N");
+    line(410, "10", "SET", "CHUNK", "SET CHUNK N");
+
+    comment(420, "AI:");
+    line(430, "10", "AI", "STATUS", "AI STATUS");
+    line(440, "10", "AI", "STEP", "AI STEP");
+    line(450, "10", "AI", "TRAIN", "AI TRAIN N");
+    line(460, "10", "AI", "EPISODES", "AI EPISODES N");
+    line(470, "10", "AI", "EVAL", "AI EVAL N");
+    line(480, "10", "AI", "RESET", "AI RESET");
+    line(490, "10", "AI", "ENV RESET", "AI ENV RESET [SEED]");
+    line(500, "10", "AI", "HARD RESET", "AI HARD RESET");
+    line(510, "10", "AI", "MODEL SAVE", "AI MODEL SAVE");
+    line(520, "10", "AI", "MODEL LOAD", "AI MODEL LOAD");
+    line(530, "10", "AI", "MODEL EXPORT", "AI MODEL EXPORT");
+    line(540, "10", "AI", "MODEL IMPORT", "AI MODEL IMPORT");
+
+    comment(550, "PRESETS:");
+    line(560, "10", "CMD", "PRESET", "PRESET DRAFT");
+    line(570, "10", "CMD", "PRESET", "PRESET PREVIEW");
+    line(580, "10", "CMD", "PRESET", "PRESET FINAL");
+    line(590, "10", "CMD", "PRESET", "PRESET ULTRA");
+    line(600, "10", "CMD", "PRESET", "PRESET AI");
+
+    writeMessage(
+      "HELP DISPLAYED / COMMAND INTERPRETER READY",
+      "info",
+    );
+  }
+
+  function showAIHelp(): void {
+    sourceScreen!.innerHTML = "";
+
+    line(10, "01", "HELP", "MODULE", "RAYTRC.AI");
+    comment(20, "------------------------------------------------------------");
+
+    line(30, "10", "AI", "STATUS", "SHOW AI STATE");
+    line(40, "10", "AI", "STEP", "RUN ONE ENVIRONMENT STEP");
+    line(50, "10", "AI", "TRAIN", "TRAIN N STEPS");
+    line(60, "10", "AI", "EPISODES", "TRAIN N EPISODES");
+    line(70, "10", "AI", "EVAL", "EVALUATE N EPISODES");
+    line(80, "10", "AI", "RESET", "RESET NETWORK + REPLAY");
+    line(90, "10", "AI", "ENV RESET", "GENERATE NEW WORLD");
+    line(100, "10", "AI", "HARD RESET", "RESET EVERYTHING");
+
+    comment(110, "MODEL:");
+    line(120, "10", "AI", "MODEL SAVE", "SAVE CURRENT MODEL");
+    line(130, "10", "AI", "MODEL LOAD", "LOAD STORED MODEL");
+    line(140, "10", "AI", "MODEL EXPORT", "EXPORT MODEL DATA");
+    line(150, "10", "AI", "MODEL IMPORT", "IMPORT MODEL DATA");
+
+    comment(160, "TRAINING EXAMPLES:");
+    line(170, "10", "CMD", "TRAIN", "AI TRAIN 1000");
+    line(180, "10", "CMD", "EPISODES", "AI EPISODES 25");
+    line(190, "10", "CMD", "EVAL", "AI EVAL 20");
+    line(200, "10", "CMD", "STEP", "AI STEP");
+    line(210, "10", "CMD", "RESET", "AI RESET");
+    line(220, "10", "CMD", "ENV", "AI ENV RESET 12345");
+
+    comment(230, "------------------------------------------------------------");
+
+    writeMessage(
+      "AI HELP DISPLAYED / DQN NAVIGATION INTERFACE READY",
+      "info",
+    );
+  }
+
+  function syncFromExternal(detail: EventDetail): void {
+    const incoming = detail?.state;
+
+    if (!incoming || typeof incoming !== "object") {
+      return;
+    }
+
+    const source = incoming as Partial<ControlState>;
+
+    for (const key of Object.keys(DEFAULT_STATE) as Array<
+      keyof ControlState
+    >) {
+      if (source[key] !== undefined) {
+        (state[key] as ControlState[typeof key]) =
+          source[key] as ControlState[typeof key];
+      }
+    }
+
+    markDirty(Boolean(detail?.dirty ?? dirty));
+    setMode(String(detail?.mode ?? memberMode));
+    setStatus(String(detail?.status ?? commandStatus));
+    refreshSource();
+  }
+
+  function handleExternalCommand(event: Event): void {
+    const custom = event as CustomEvent<EventDetail>;
+    const command = custom.detail?.command;
+
+    if (typeof command === "string" && command.trim()) {
+      execute(command);
+    }
+  }
+
+  commandSubmit.addEventListener("click", () => {
+    const value = commandInput.value.trim();
+
+    if (!value) {
+      commandInput.focus();
+      return;
+    }
+
+    execute(value);
+    commandInput.value = "";
+    commandInput.focus();
+  });
+
+  commandInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commandSubmit.click();
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+
+      if (!commandHistory.length) return;
+
+      historyIndex = Math.min(historyIndex + 1, commandHistory.length - 1);
+
+      commandInput.value =
+        commandHistory[historyIndex] ?? "";
+      commandInput.setSelectionRange(
+        commandInput.value.length,
+        commandInput.value.length,
+      );
+
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+
+      if (!commandHistory.length) return;
+
+      historyIndex = Math.max(historyIndex - 1, -1);
+
+      commandInput.value =
+        historyIndex === -1
+          ? ""
+          : commandHistory[historyIndex] ?? "";
+
+      commandInput.setSelectionRange(
+        commandInput.value.length,
+        commandInput.value.length,
+      );
+    }
+  });
+
+  window.addEventListener(
+    "raytracer:controls-command",
+    handleExternalCommand,
+  );
+
+  window.addEventListener(
+    "raytracer:controls-sync",
+    (event) => {
+      syncFromExternal(
+        (event as CustomEvent<EventDetail>).detail ?? {},
+      );
+    },
+  );
+
+  window.addEventListener(
+    "raytracer:controls-open",
+    () => {
+      const section = document.getElementById("controls");
+
+      if (!section) return;
+
+      section.classList.add("controls-visible");
+      section.setAttribute("aria-hidden", "false");
+
+      setMode("OPEN");
+      setStatus("OPEN");
+      refreshSource();
+      commandInput.focus();
+    },
+  );
+
+  window.addEventListener(
+    "raytracer:controls-close",
+    () => {
+      const section = document.getElementById("controls");
+
+      if (!section) return;
+
+      section.classList.remove("controls-visible");
+      section.setAttribute("aria-hidden", "true");
+
+      setMode("READY");
+      setStatus("CLOSED");
+    },
+  );
+
+  window.addEventListener(
+    "raytracer:ai-state",
+    (event) => {
+      const detail = (event as CustomEvent<EventDetail>).detail ?? {};
+
+      dispatch("raytracer:controls-ai-state", {
+        ...detail,
+        source: "controls",
+      });
+    },
+  );
+
+  const api = {
+    getState(): ControlState {
+      return cloneState(state);
+    },
+
+    setState(next: Partial<ControlState>): void {
+      Object.assign(state, next);
+      markDirty(true);
+      setMode("EDIT");
+      setStatus("EXTERNAL STATE UPDATE");
+      refreshSource();
+    },
+
+    execute,
+
+    status(): ControlState & {
+      dirty: boolean;
+      mode: string;
+      commandStatus: string;
+    } {
+      return {
+        ...cloneState(state),
+        dirty,
+        mode: memberMode,
+        commandStatus,
+      };
+    },
+
+    reset(): void {
+      resetStateOnly();
+    },
+
+    apply(): void {
+      execute("APPLY");
+    },
+
+    open(): void {
+      dispatch("raytracer:controls-open");
+    },
+
+    close(): void {
+      dispatch("raytracer:controls-close");
+    },
+
+    ai(action: string, payload: EventDetail = {}): void {
+      emitAI(action, payload);
+    },
+  };
+
+  (
+    window as typeof window & {
+      RayTracerControls?: typeof api;
+    }
+  ).RayTracerControls = api;
+
+  markDirty(false);
+  setMode("READY");
+  setStatus("READY");
+  refreshSource();
+</script>

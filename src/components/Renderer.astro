@@ -1,0 +1,5089 @@
+---
+---
+
+<section
+  id="renderer"
+  class="renderer"
+>
+  <canvas
+    id="world-canvas"
+    class="world-canvas"
+    aria-label="RayTracer AI navigation world"
+  ></canvas>
+
+  <!--
+    Runtime telemetry is intentionally kept in the DOM but hidden.
+    Main telemetry belongs to Benchmark.astro.
+  -->
+  <div
+    class="terminal"
+    aria-hidden="true"
+  >
+    <div class="terminal-head">
+      <span class="cyan">RAYTRC.RUNTIME</span>
+      <span class="gray">/</span>
+      <span class="white">AI NAVIGATION ENGINE</span>
+      <span class="gray">/</span>
+      <span
+        id="runtime-mode"
+        class="green"
+      >
+        WAITING
+      </span>
+    </div>
+
+    <div class="terminal-ruler">
+      <span>0001</span>
+
+      <span>
+        +....1....+....2....+....3....+....4....+....5....+....6....+....7....+....8
+      </span>
+
+      <span>COLS&gt;</span>
+    </div>
+
+    <div
+      id="runtime-screen"
+      class="runtime-screen"
+    ></div>
+  </div>
+
+  <div
+    id="runtime-message"
+    class="runtime-message"
+  >
+    <span class="gray">STATUS ===&gt;</span>
+
+    <span id="runtime-message-text">
+      INITIALIZING
+    </span>
+  </div>
+</section>
+
+<style>
+  .renderer {
+    position: relative;
+    width: 100%;
+    min-height: 100vh;
+    overflow: hidden;
+    background: #000;
+    color: #d0d0d0;
+    font-family:
+      "IBM Plex Mono",
+      "Courier New",
+      Consolas,
+      monospace;
+  }
+
+  .world-canvas {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: #000;
+    image-rendering: pixelated;
+  }
+
+  /*
+   * Renderer telemetry is deliberately hidden.
+   * The main source-editor belongs to index.astro.
+   * Benchmark.astro owns the full telemetry screen.
+   */
+  .terminal {
+    display: none;
+  }
+
+  .terminal-head {
+    min-height: 28px;
+    padding: 5px 9px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    border-bottom: 1px solid #202020;
+    background: #050505;
+    white-space: nowrap;
+    overflow: hidden;
+    font-size: 11px;
+  }
+
+  .terminal-ruler {
+    min-height: 18px;
+    padding: 2px 9px;
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+    gap: 8px;
+    border-bottom: 1px solid #181818;
+    color: #4f4f4f;
+    font-size: 10px;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  .terminal-ruler span:nth-child(2) {
+    overflow: hidden;
+  }
+
+  .runtime-screen {
+    max-height: 46vh;
+    overflow: auto;
+    padding: 6px 0 24px;
+    scrollbar-color: #303030 #000;
+    scrollbar-width: thin;
+  }
+
+  .runtime-row {
+    min-height: 17px;
+    display: grid;
+    grid-template-columns:
+      48px
+      70px
+      145px
+      minmax(0, 1fr);
+    gap: 0;
+    padding-right: 10px;
+    white-space: pre;
+    font-size: 11px;
+  }
+
+  .runtime-row:hover {
+    background: #020e02;
+  }
+
+  .runtime-line {
+    padding-right: 8px;
+    text-align: right;
+    color: #3e3e3e;
+    user-select: none;
+  }
+
+  .runtime-level {
+    color: #505050;
+  }
+
+  .runtime-key {
+    color: #00dddd;
+  }
+
+  .runtime-value {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #fff;
+  }
+
+  .runtime-comment {
+    min-height: 17px;
+    padding: 2px 10px 2px 136px;
+    color: #535353;
+    white-space: pre-wrap;
+    font-size: 10px;
+  }
+
+  .runtime-ok {
+    color: #00d400;
+  }
+
+  .runtime-info {
+    color: #00dddd;
+  }
+
+  .runtime-warn {
+    color: #ffe600;
+  }
+
+  .runtime-error {
+    color: #ff2222;
+  }
+
+  .runtime-magenta {
+    color: #ff5fff;
+  }
+
+  .runtime-message {
+    position: absolute;
+    top: 8px;
+    left: 10px;
+    z-index: 10;
+    display: flex;
+    gap: 7px;
+    padding: 3px 6px;
+    border: 1px solid #202020;
+    background: rgba(0, 0, 0, 0.84);
+    color: #d0d0d0;
+    font-size: 10px;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+
+  .green {
+    color: #00d400;
+  }
+
+  .cyan {
+    color: #00dddd;
+  }
+
+  .white {
+    color: #fff;
+  }
+
+  .gray {
+    color: #606060;
+  }
+
+  .red {
+    color: #ff2222;
+  }
+
+  .yellow {
+    color: #ffe600;
+  }
+
+  .magenta {
+    color: #ff5fff;
+  }
+
+  @media (max-width: 800px) {
+    .runtime-row {
+      grid-template-columns:
+        42px
+        58px
+        120px
+        minmax(0, 1fr);
+
+      font-size: 10px;
+    }
+
+    .runtime-comment {
+      padding-left: 110px;
+    }
+  }
+
+  @media (max-width: 560px) {
+    .runtime-row {
+      grid-template-columns:
+        38px
+        46px
+        98px
+        minmax(0, 1fr);
+
+      font-size: 9px;
+    }
+
+    .runtime-comment {
+      padding-left: 88px;
+      font-size: 9px;
+    }
+  }
+</style>
+
+<script>
+  type Engine = {
+    version(): string;
+    backend(): string;
+    sensor_count(): number;
+    observation_size(): number;
+    action_count(): number;
+    model_parameter_count(): number;
+
+    reset_ai(): void;
+    reset_environment(seed: number): void;
+    hard_reset(): void;
+
+    set_difficulty(value: number): void;
+    set_obstacle_count(value: number): void;
+    set_episode_steps(value: number): void;
+    set_learning_rate(value: number): void;
+    set_gamma(value: number): void;
+    set_batch_size(value: number): void;
+    set_epsilon(value: number): void;
+    set_epsilon_min(value: number): void;
+    set_epsilon_decay(value: number): void;
+    set_target_update(value: number): void;
+
+    current_seed(): number;
+    current_step(): number;
+    current_episode(): number | bigint;
+    is_done(): boolean;
+    is_success(): boolean;
+    is_collision(): boolean;
+    epsilon(): number;
+    learning_rate(): number;
+    gamma(): number;
+    last_loss(): number;
+    last_reward(): number;
+    last_episode_reward(): number;
+    last_episode_steps(): number;
+    replay_size(): number;
+
+    get_observation(): number[] | Float32Array;
+    get_sensor_buffer(): number[] | Float32Array;
+    get_agent_buffer(): number[] | Float32Array;
+    get_target_buffer(): number[] | Float32Array;
+    get_obstacle_buffer(): number[] | Float32Array;
+    get_path_buffer(): number[] | Float32Array;
+
+    obstacle_count(): number;
+
+    predict_action(): number;
+    q_values(): number[] | Float32Array;
+
+    step(action: number): number[] | Float32Array;
+    train_step(): number[] | Float32Array;
+    train_steps(count: number): number[] | Float32Array;
+    train_episode(): number[] | Float32Array;
+    train_episodes(count: number): number[] | Float32Array;
+    evaluate_episodes(
+      count: number,
+      base_seed: number,
+    ): number[] | Float32Array;
+
+    metrics(): number[] | Float32Array;
+    status_json(): string;
+
+    export_model(): string;
+    import_model(data: string): boolean;
+    save_model(): string;
+    load_model(data: string): boolean;
+  };
+
+  type WasmModule = {
+    default: (
+      input?: unknown,
+    ) => Promise<unknown>;
+
+    RayTracerEngine: new () => Engine;
+  };
+
+  type ControlsState = {
+    width: number;
+    height: number;
+    samples: number;
+    bounces: number;
+    accumulation: boolean;
+    exposure: number;
+
+    cameraX: number;
+    cameraY: number;
+    cameraZ: number;
+    cameraFov: number;
+    cameraPitch: number;
+    cameraYaw: number;
+
+    lightX: number;
+    lightY: number;
+    lightZ: number;
+    lightPower: number;
+
+    roughness: number;
+    metallic: number;
+    ior: number;
+    materialId: number;
+
+    scene: string;
+    objects: number;
+    bvh: string;
+
+    difficulty: number;
+    obstacles: number;
+    episodeSteps: number;
+
+    learningRate: number;
+    gamma: number;
+    batchSize: number;
+    epsilon: number;
+    epsilonMin: number;
+    epsilonDecay: number;
+    targetUpdate: number;
+
+    trainChunk: number;
+  };
+
+  type RuntimeSnapshot = {
+    mode: string;
+    state: string;
+    status: string;
+
+    backend: string;
+    version: string;
+
+    seed: number;
+    step: number;
+    episode: number;
+    episodeSteps: number;
+
+    reward: number;
+    episodeReward: number;
+    loss: number;
+    epsilon: number;
+    learningRate: number;
+    gamma: number;
+    replay: number;
+
+    success: boolean;
+    collision: boolean;
+    done: boolean;
+
+    sensorCount: number;
+    observationSize: number;
+    actionCount: number;
+    parameterCount: number;
+    obstacleCount: number;
+
+    width: number;
+    height: number;
+    samples: number;
+    bounces: number;
+  };
+
+  const canvas =
+    document.getElementById(
+      "world-canvas",
+    ) as HTMLCanvasElement | null;
+
+  const ctx =
+    canvas?.getContext(
+      "2d",
+      {
+        alpha: false,
+      },
+    );
+
+  const runtimeScreen =
+    document.getElementById(
+      "runtime-screen",
+    );
+
+  const runtimeMode =
+    document.getElementById(
+      "runtime-mode",
+    );
+
+  const runtimeMessageText =
+    document.getElementById(
+      "runtime-message-text",
+    );
+
+  if (
+    !canvas ||
+    !ctx ||
+    !runtimeScreen ||
+    !runtimeMode ||
+    !runtimeMessageText
+  ) {
+    throw new Error(
+      "RAYTRC.RUNTIME DOM initialization failed",
+    );
+  }
+
+  let engine: Engine | null = null;
+  let wasmModule: WasmModule | null = null;
+
+  let wasmReady = false;
+  let initialized = false;
+  let destroyed = false;
+
+  let training = false;
+  let runMode = false;
+  let evaluation = false;
+
+  let trainingTimer: number | null =
+    null;
+
+  let frameHandle = 0;
+
+  let controlsState: ControlsState = {
+    width: 1280,
+    height: 720,
+    samples: 64,
+    bounces: 4,
+    accumulation: true,
+    exposure: 1,
+
+    cameraX: 0,
+    cameraY: 1.5,
+    cameraZ: 5,
+    cameraFov: 45,
+    cameraPitch: 0,
+    cameraYaw: 0,
+
+    lightX: 20,
+    lightY: 100,
+    lightZ: 10,
+    lightPower: 500,
+
+    roughness: 0.2,
+    metallic: 0,
+    ior: 1.5,
+    materialId: 1,
+
+    scene: "DEFAULT",
+    objects: 3,
+    bvh: "AUTO",
+
+    difficulty: 3,
+    obstacles: 12,
+    episodeSteps: 1000,
+
+    learningRate: 0.001,
+    gamma: 0.99,
+    batchSize: 64,
+    epsilon: 1,
+    epsilonMin: 0.05,
+    epsilonDecay: 0.995,
+    targetUpdate: 1000,
+
+    trainChunk: 250,
+  };
+
+  let snapshot: RuntimeSnapshot = {
+    mode: "WAITING",
+    state: "INITIALIZING",
+    status: "INITIALIZING",
+
+    backend: "UNKNOWN",
+    version: "UNKNOWN",
+
+    seed: 0,
+    step: 0,
+    episode: 0,
+    episodeSteps: 0,
+
+    reward: 0,
+    episodeReward: 0,
+    loss: 0,
+    epsilon: 1,
+    learningRate: 0.001,
+    gamma: 0.99,
+    replay: 0,
+
+    success: false,
+    collision: false,
+    done: false,
+
+    sensorCount: 0,
+    observationSize: 0,
+    actionCount: 0,
+    parameterCount: 0,
+    obstacleCount: 0,
+
+    width: 1280,
+    height: 720,
+    samples: 64,
+    bounces: 4,
+  };
+
+  let sensorBuffer: number[] = [];
+  let agentBuffer: number[] = [];
+  let targetBuffer: number[] = [];
+  let obstacleBuffer: number[] = [];
+  let pathBuffer: number[] = [];
+
+  let worldMinX = -20;
+  let worldMaxX = 20;
+  let worldMinZ = -20;
+  let worldMaxZ = 20;
+
+  let currentAction = 0;
+
+  let lastRenderTime = 0;
+  let fps = 0;
+  let renderCount = 0;
+
+  const ACTION_NAMES = [
+    "FORWARD",
+    "LEFT",
+    "RIGHT",
+    "BRAKE",
+    "REVERSE",
+  ];
+
+  const BASE = (() => {
+    const raw =
+      import.meta.env.BASE_URL ||
+      "/";
+
+    return raw.endsWith("/")
+      ? raw
+      : `${raw}/`;
+  })();
+
+  /*
+   * public/ is copied as-is and served by URL.
+   * Build an absolute browser URL instead of allowing
+   * Vite to treat the file as a source-module dependency.
+   */
+  const WASM_JS_URL =
+    new URL(
+      "wasm/raytracer.js",
+      new URL(
+        BASE,
+        document.baseURI,
+      ),
+    ).href;
+
+  function finite(
+    value: unknown,
+    fallback = 0,
+  ): number {
+    const number =
+      Number(value);
+
+    return Number.isFinite(
+      number,
+    )
+      ? number
+      : fallback;
+  }
+
+  function integer(
+    value: unknown,
+    fallback = 0,
+  ): number {
+    return Math.floor(
+      finite(
+        value,
+        fallback,
+      ),
+    );
+  }
+
+  function fixed(
+    value: unknown,
+    digits = 3,
+  ): string {
+    return finite(
+      value,
+    ).toFixed(
+      digits,
+    );
+  }
+
+  function pad(
+    value: unknown,
+    length: number,
+  ): string {
+    return String(
+      integer(value),
+    ).padStart(
+      length,
+      "0",
+    );
+  }
+
+  function upper(
+    value: unknown,
+  ): string {
+    return String(
+      value ?? "",
+    )
+      .trim()
+      .toUpperCase();
+  }
+
+  function emit(
+    name: string,
+    detail: Record<
+      string,
+      unknown
+    > = {},
+  ): void {
+    window.dispatchEvent(
+      new CustomEvent(
+        name,
+        {
+          detail,
+        },
+      ),
+    );
+  }
+
+  function setMessage(
+    message: string,
+  ): void {
+    runtimeMessageText.textContent =
+      message;
+  }
+
+  function setMode(
+    mode: string,
+  ): void {
+    snapshot.mode =
+      mode;
+
+    runtimeMode!.textContent =
+      mode;
+  }
+
+  function setState(
+    state: string,
+  ): void {
+    snapshot.state =
+      state;
+  }
+
+  function clearTrainingTimer(): void {
+    if (
+      trainingTimer !==
+      null
+    ) {
+      window.clearTimeout(
+        trainingTimer,
+      );
+
+      trainingTimer =
+        null;
+    }
+  }
+
+  function addRow(
+    lineNumber: number,
+    key: string,
+    value: string,
+    tone = "normal",
+  ): void {
+    const row =
+      document.createElement(
+        "div",
+      );
+
+    row.className =
+      "runtime-row";
+
+    const toneClass =
+      tone === "ok"
+        ? "runtime-ok"
+        : tone === "info"
+          ? "runtime-info"
+          : tone === "warn"
+            ? "runtime-warn"
+            : tone === "error"
+              ? "runtime-error"
+              : tone === "magenta"
+                ? "runtime-magenta"
+                : "";
+
+    row.innerHTML = `
+      <span class="runtime-line">${pad(lineNumber, 4)}</span>
+      <span class="runtime-level">10</span>
+      <span class="runtime-key">${key}</span>
+      <span class="runtime-value ${toneClass}">${value}</span>
+    `;
+
+    runtimeScreen!.appendChild(
+      row,
+    );
+  }
+
+  function addComment(
+    text: string,
+  ): void {
+    const row =
+      document.createElement(
+        "div",
+      );
+
+    row.className =
+      "runtime-comment";
+
+    row.textContent =
+      text;
+
+    runtimeScreen!.appendChild(
+      row,
+    );
+  }
+
+  function renderRuntime(): void {
+    runtimeScreen!.innerHTML =
+      "";
+
+    addComment(
+      "RAYTRC.RUNTIME / RUST WASM / AUTONOMOUS NAVIGATION",
+    );
+
+    addComment(
+      "------------------------------------------------------------",
+    );
+
+    addRow(
+      10,
+      "MODE",
+      snapshot.mode,
+      snapshot.mode ===
+        "ERROR"
+        ? "error"
+        : "info",
+    );
+
+    addRow(
+      20,
+      "STATE",
+      snapshot.state,
+      snapshot.state ===
+        "ERROR"
+        ? "error"
+        : snapshot.state ===
+            "RUNNING"
+          ? "ok"
+          : "normal",
+    );
+
+    addRow(
+      30,
+      "STATUS",
+      snapshot.status,
+    );
+
+    addComment(
+      "ENGINE",
+    );
+
+    addRow(
+      40,
+      "BACKEND",
+      snapshot.backend,
+      "info",
+    );
+
+    addRow(
+      50,
+      "VERSION",
+      snapshot.version,
+    );
+
+    addRow(
+      60,
+      "SENSORS",
+      pad(
+        snapshot.sensorCount,
+        3,
+      ),
+    );
+
+    addRow(
+      70,
+      "OBSERVATION",
+      pad(
+        snapshot.observationSize,
+        3,
+      ),
+    );
+
+    addRow(
+      80,
+      "ACTIONS",
+      pad(
+        snapshot.actionCount,
+        2,
+      ),
+    );
+
+    addRow(
+      90,
+      "PARAMETERS",
+      String(
+        snapshot.parameterCount,
+      ),
+    );
+
+    addComment(
+      "ENVIRONMENT",
+    );
+
+    addRow(
+      100,
+      "SEED",
+      pad(
+        snapshot.seed,
+        10,
+      ),
+    );
+
+    addRow(
+      110,
+      "EPISODE",
+      pad(
+        snapshot.episode,
+        8,
+      ),
+    );
+
+    addRow(
+      120,
+      "STEP",
+      pad(
+        snapshot.step,
+        8,
+      ),
+    );
+
+    addRow(
+      130,
+      "MAX-STEPS",
+      pad(
+        snapshot.episodeSteps,
+        7,
+      ),
+    );
+
+    addRow(
+      140,
+      "OBSTACLES",
+      pad(
+        snapshot.obstacleCount,
+        3,
+      ),
+    );
+
+    addComment(
+      "TRAINER",
+    );
+
+    addRow(
+      150,
+      "REWARD",
+      fixed(
+        snapshot.reward,
+        6,
+      ),
+      snapshot.reward >=
+        0
+        ? "ok"
+        : "warn",
+    );
+
+    addRow(
+      160,
+      "EPISODE-REWARD",
+      fixed(
+        snapshot.episodeReward,
+        6,
+      ),
+      snapshot.episodeReward >=
+        0
+        ? "ok"
+        : "warn",
+    );
+
+    addRow(
+      170,
+      "LOSS",
+      fixed(
+        snapshot.loss,
+        8,
+      ),
+    );
+
+    addRow(
+      180,
+      "EPSILON",
+      fixed(
+        snapshot.epsilon,
+        6,
+      ),
+    );
+
+    addRow(
+      190,
+      "LEARNING-RATE",
+      fixed(
+        snapshot.learningRate,
+        7,
+      ),
+    );
+
+    addRow(
+      200,
+      "GAMMA",
+      fixed(
+        snapshot.gamma,
+        6,
+      ),
+    );
+
+    addRow(
+      210,
+      "REPLAY",
+      String(
+        snapshot.replay,
+      ),
+    );
+
+    addRow(
+      220,
+      "ACTION",
+      `${currentAction} ${
+        ACTION_NAMES[
+          currentAction
+        ] ?? "UNKNOWN"
+      }`,
+      "info",
+    );
+
+    addComment(
+      "RESULT",
+    );
+
+    addRow(
+      230,
+      "SUCCESS",
+      snapshot.success
+        ? "YES"
+        : "NO",
+      snapshot.success
+        ? "ok"
+        : "normal",
+    );
+
+    addRow(
+      240,
+      "COLLISION",
+      snapshot.collision
+        ? "YES"
+        : "NO",
+      snapshot.collision
+        ? "warn"
+        : "ok",
+    );
+
+    addRow(
+      250,
+      "DONE",
+      snapshot.done
+        ? "YES"
+        : "NO",
+      snapshot.done
+        ? "info"
+        : "normal",
+    );
+
+    addComment(
+      "RENDER",
+    );
+
+    addRow(
+      260,
+      "RESOLUTION",
+      `${snapshot.width} X ${snapshot.height}`,
+    );
+
+    addRow(
+      270,
+      "SAMPLES",
+      pad(
+        snapshot.samples,
+        6,
+      ),
+    );
+
+    addRow(
+      280,
+      "BOUNCES",
+      pad(
+        snapshot.bounces,
+        4,
+      ),
+    );
+
+    addRow(
+      290,
+      "FPS",
+      fixed(
+        fps,
+        2,
+      ),
+    );
+
+    addComment(
+      "------------------------------------------------------------",
+    );
+
+    addRow(
+      300,
+      "TRAINING",
+      training
+        ? "ACTIVE"
+        : "IDLE",
+      training
+        ? "ok"
+        : "normal",
+    );
+
+    addRow(
+      310,
+      "RUN-MODE",
+      runMode
+        ? "ACTIVE"
+        : "IDLE",
+      runMode
+        ? "ok"
+        : "normal",
+    );
+
+    addRow(
+      320,
+      "EVALUATION",
+      evaluation
+        ? "ACTIVE"
+        : "IDLE",
+      evaluation
+        ? "info"
+        : "normal",
+    );
+  }
+
+  function safeBuffer(
+    value: unknown,
+  ): number[] {
+    if (
+      value === null ||
+      value === undefined
+    ) {
+      return [];
+    }
+
+    if (
+      Array.isArray(
+        value,
+      )
+    ) {
+      return value.map(
+        (item) =>
+          finite(item),
+      );
+    }
+
+    if (
+      ArrayBuffer.isView(
+        value,
+      )
+    ) {
+      const view =
+        value as unknown as ArrayLike<unknown>;
+
+      return Array.from(
+        {
+          length:
+            view.length,
+        },
+        (_, index) =>
+          finite(
+            view[index],
+          ),
+      );
+    }
+
+    if (
+      typeof value ===
+        "object" &&
+      value !== null &&
+      Symbol.iterator in
+        value
+    ) {
+      return Array.from(
+        value as Iterable<unknown>,
+        (item) =>
+          finite(item),
+      );
+    }
+
+    return [];
+  }
+
+  function syncSnapshot(): void {
+    if (!engine) {
+      return;
+    }
+
+    try {
+      snapshot.backend =
+        engine.backend();
+
+      snapshot.version =
+        engine.version();
+
+      snapshot.seed =
+        finite(
+          engine.current_seed(),
+        );
+
+      snapshot.step =
+        finite(
+          engine.current_step(),
+        );
+
+      snapshot.episode =
+        finite(
+          engine.current_episode(),
+        );
+
+      snapshot.episodeSteps =
+        finite(
+          engine.last_episode_steps(),
+        );
+
+      snapshot.reward =
+        finite(
+          engine.last_reward(),
+        );
+
+      snapshot.episodeReward =
+        finite(
+          engine.last_episode_reward(),
+        );
+
+      snapshot.loss =
+        finite(
+          engine.last_loss(),
+        );
+
+      snapshot.epsilon =
+        finite(
+          engine.epsilon(),
+        );
+
+      snapshot.learningRate =
+        finite(
+          engine.learning_rate(),
+        );
+
+      snapshot.gamma =
+        finite(
+          engine.gamma(),
+        );
+
+      snapshot.replay =
+        finite(
+          engine.replay_size(),
+        );
+
+      snapshot.success =
+        engine.is_success();
+
+      snapshot.collision =
+        engine.is_collision();
+
+      snapshot.done =
+        engine.is_done();
+
+      snapshot.sensorCount =
+        finite(
+          engine.sensor_count(),
+        );
+
+      snapshot.observationSize =
+        finite(
+          engine.observation_size(),
+        );
+
+      snapshot.actionCount =
+        finite(
+          engine.action_count(),
+        );
+
+      snapshot.parameterCount =
+        finite(
+          engine.model_parameter_count(),
+        );
+
+      snapshot.obstacleCount =
+        finite(
+          engine.obstacle_count(),
+        );
+
+      if (
+        snapshot.state !==
+          "ERROR" &&
+        snapshot.status ===
+          "INITIALIZING"
+      ) {
+        snapshot.status =
+          "READY";
+      }
+
+      sensorBuffer =
+        safeBuffer(
+          engine.get_sensor_buffer(),
+        );
+
+      agentBuffer =
+        safeBuffer(
+          engine.get_agent_buffer(),
+        );
+
+      targetBuffer =
+        safeBuffer(
+          engine.get_target_buffer(),
+        );
+
+      obstacleBuffer =
+        safeBuffer(
+          engine.get_obstacle_buffer(),
+        );
+
+      pathBuffer =
+        safeBuffer(
+          engine.get_path_buffer(),
+        );
+
+      calculateWorldBounds();
+      emitAIState();
+      renderRuntime();
+    } catch (error) {
+      handleRuntimeError(
+        error,
+      );
+    }
+  }
+
+  function emitAIState(): void {
+    const detail = {
+      ...snapshot,
+
+      mode:
+        snapshot.mode,
+
+      state:
+        snapshot.state,
+
+      backend:
+        snapshot.backend,
+
+      version:
+        snapshot.version,
+
+      seed:
+        snapshot.seed,
+
+      step:
+        snapshot.step,
+
+      episode:
+        snapshot.episode,
+
+      reward:
+        snapshot.reward,
+
+      episodeReward:
+        snapshot.episodeReward,
+
+      loss:
+        snapshot.loss,
+
+      epsilon:
+        snapshot.epsilon,
+
+      learningRate:
+        snapshot.learningRate,
+
+      gamma:
+        snapshot.gamma,
+
+      replaySize:
+        snapshot.replay,
+
+      success:
+        snapshot.success
+          ? 1
+          : 0,
+
+      collision:
+        snapshot.collision
+          ? 1
+          : 0,
+
+      done:
+        snapshot.done
+          ? 1
+          : 0,
+
+      sensors:
+        snapshot.sensorCount,
+
+      observationSize:
+        snapshot.observationSize,
+
+      actions:
+        snapshot.actionCount,
+
+      parameters:
+        snapshot.parameterCount,
+
+      obstacles:
+        snapshot.obstacleCount,
+
+      difficulty:
+        controlsState.difficulty,
+    };
+
+    emit(
+      "raytracer:ai-state",
+      detail,
+    );
+
+    emit(
+      "raytracer:ai-metrics",
+      detail,
+    );
+  }
+
+  function clampInt(
+    value: unknown,
+    min: number,
+    max: number,
+  ): number {
+    return Math.min(
+      max,
+      Math.max(
+        min,
+        Math.floor(
+          finite(
+            value,
+            min,
+          ),
+        ),
+      ),
+    );
+  }
+
+  function clampFloat(
+    value: unknown,
+    min: number,
+    max: number,
+  ): number {
+    return Math.min(
+      max,
+      Math.max(
+        min,
+        finite(
+          value,
+          min,
+        ),
+      ),
+    );
+  }
+
+  function applyControls(
+    next: Partial<ControlsState>,
+  ): void {
+    controlsState = {
+      ...controlsState,
+      ...next,
+    };
+
+    if (!engine) {
+      return;
+    }
+
+    try {
+      if (
+        next.difficulty !==
+        undefined
+      ) {
+        engine.set_difficulty(
+          clampInt(
+            next.difficulty,
+            1,
+            10,
+          ),
+        );
+      }
+
+      if (
+        next.obstacles !==
+        undefined
+      ) {
+        engine.set_obstacle_count(
+          clampInt(
+            next.obstacles,
+            1,
+            64,
+          ),
+        );
+      }
+
+      if (
+        next.episodeSteps !==
+        undefined
+      ) {
+        engine.set_episode_steps(
+          clampInt(
+            next.episodeSteps,
+            50,
+            5000,
+          ),
+        );
+      }
+
+      if (
+        next.learningRate !==
+        undefined
+      ) {
+        engine.set_learning_rate(
+          clampFloat(
+            next.learningRate,
+            0.00001,
+            0.1,
+          ),
+        );
+      }
+
+      if (
+        next.gamma !==
+        undefined
+      ) {
+        engine.set_gamma(
+          clampFloat(
+            next.gamma,
+            0.80,
+            0.9999,
+          ),
+        );
+      }
+
+      if (
+        next.batchSize !==
+        undefined
+      ) {
+        engine.set_batch_size(
+          clampInt(
+            next.batchSize,
+            1,
+            256,
+          ),
+        );
+      }
+
+      if (
+        next.epsilon !==
+        undefined
+      ) {
+        engine.set_epsilon(
+          clampFloat(
+            next.epsilon,
+            0,
+            1,
+          ),
+        );
+      }
+
+      if (
+        next.epsilonMin !==
+        undefined
+      ) {
+        engine.set_epsilon_min(
+          clampFloat(
+            next.epsilonMin,
+            0,
+            1,
+          ),
+        );
+      }
+
+      if (
+        next.epsilonDecay !==
+        undefined
+      ) {
+        engine.set_epsilon_decay(
+          clampFloat(
+            next.epsilonDecay,
+            0.9,
+            0.999999,
+          ),
+        );
+      }
+
+      if (
+        next.targetUpdate !==
+        undefined
+      ) {
+        engine.set_target_update(
+          clampInt(
+            next.targetUpdate,
+            1,
+            100000,
+          ),
+        );
+      }
+
+      snapshot.width =
+        clampInt(
+          controlsState.width,
+          1,
+          16384,
+        );
+
+      snapshot.height =
+        clampInt(
+          controlsState.height,
+          1,
+          16384,
+        );
+
+      snapshot.samples =
+        clampInt(
+          controlsState.samples,
+          1,
+          1000000,
+        );
+
+      snapshot.bounces =
+        clampInt(
+          controlsState.bounces,
+          1,
+          128,
+        );
+
+      emit(
+        "raytracer:controls-applied",
+        {
+          state: {
+            ...controlsState,
+          },
+        },
+      );
+
+      syncSnapshot();
+    } catch (error) {
+      handleRuntimeError(
+        error,
+      );
+    }
+  }
+
+  function calculateWorldBounds(): void {
+    let minX =
+      Number.POSITIVE_INFINITY;
+
+    let maxX =
+      Number.NEGATIVE_INFINITY;
+
+    let minZ =
+      Number.POSITIVE_INFINITY;
+
+    let maxZ =
+      Number.NEGATIVE_INFINITY;
+
+    function inspectPoint(
+      x: number,
+      z: number,
+    ): void {
+      if (
+        !Number.isFinite(x) ||
+        !Number.isFinite(z)
+      ) {
+        return;
+      }
+
+      minX =
+        Math.min(
+          minX,
+          x,
+        );
+
+      maxX =
+        Math.max(
+          maxX,
+          x,
+        );
+
+      minZ =
+        Math.min(
+          minZ,
+          z,
+        );
+
+      maxZ =
+        Math.max(
+          maxZ,
+          z,
+        );
+    }
+
+    if (
+      agentBuffer.length >= 3
+    ) {
+      inspectPoint(
+        agentBuffer[0],
+        agentBuffer[2],
+      );
+    }
+
+    if (
+      targetBuffer.length >= 3
+    ) {
+      inspectPoint(
+        targetBuffer[0],
+        targetBuffer[2],
+      );
+    }
+
+    /*
+     * Rust obstacle format:
+     *
+     * 8 floats / obstacle
+     *
+     * [0] center.x
+     * [1] center.y
+     * [2] center.z
+     * [3] half.x
+     * [4] half.y
+     * [5] half.z
+     * [6] material
+     * [7] reserved
+     */
+    if (
+      obstacleBuffer.length >= 8
+    ) {
+      for (
+        let i = 0;
+        i + 7 <
+        obstacleBuffer.length;
+        i += 8
+      ) {
+        const centerX =
+          obstacleBuffer[i];
+
+        const centerZ =
+          obstacleBuffer[
+            i + 2
+          ];
+
+        const halfX =
+          Math.abs(
+            obstacleBuffer[
+              i + 3
+            ],
+          );
+
+        const halfZ =
+          Math.abs(
+            obstacleBuffer[
+              i + 5
+            ],
+          );
+
+        inspectPoint(
+          centerX - halfX,
+          centerZ - halfZ,
+        );
+
+        inspectPoint(
+          centerX + halfX,
+          centerZ + halfZ,
+        );
+      }
+    } else if (
+      obstacleBuffer.length >= 4
+    ) {
+      /*
+       * Legacy fallback:
+       *
+       * [minX, minZ, maxX, maxZ]
+       */
+      for (
+        let i = 0;
+        i + 3 <
+        obstacleBuffer.length;
+        i += 4
+      ) {
+        inspectPoint(
+          obstacleBuffer[i],
+          obstacleBuffer[
+            i + 1
+          ],
+        );
+
+        inspectPoint(
+          obstacleBuffer[
+            i + 2
+          ],
+          obstacleBuffer[
+            i + 3
+          ],
+        );
+      }
+    }
+
+    /*
+     * Rust path format:
+     *
+     * 3 floats / point
+     *
+     * [x, y, z]
+     */
+    if (
+      pathBuffer.length >= 3
+    ) {
+      for (
+        let i = 0;
+        i + 2 <
+        pathBuffer.length;
+        i += 3
+      ) {
+        inspectPoint(
+          pathBuffer[i],
+          pathBuffer[
+            i + 2
+          ],
+        );
+      }
+    }
+
+    if (
+      !Number.isFinite(minX) ||
+      !Number.isFinite(maxX) ||
+      !Number.isFinite(minZ) ||
+      !Number.isFinite(maxZ)
+    ) {
+      minX = -12;
+      maxX = 12;
+      minZ = -12;
+      maxZ = 12;
+    }
+
+    const width =
+      Math.max(
+        10,
+        maxX - minX,
+      );
+
+    const height =
+      Math.max(
+        10,
+        maxZ - minZ,
+      );
+
+    const paddingX =
+      Math.max(
+        2,
+        width * 0.12,
+      );
+
+    const paddingZ =
+      Math.max(
+        2,
+        height * 0.12,
+      );
+
+    worldMinX =
+      minX - paddingX;
+
+    worldMaxX =
+      maxX + paddingX;
+
+    worldMinZ =
+      minZ - paddingZ;
+
+    worldMaxZ =
+      maxZ + paddingZ;
+  }
+
+  function worldToScreen(
+    x: number,
+    z: number,
+  ): [number, number] {
+    const width =
+      canvas!.width;
+
+    const height =
+      canvas!.height;
+
+    const rangeX =
+      Math.max(
+        1,
+        worldMaxX -
+          worldMinX,
+      );
+
+    const rangeZ =
+      Math.max(
+        1,
+        worldMaxZ -
+          worldMinZ,
+      );
+
+    const scale =
+      Math.min(
+        width / rangeX,
+        height / rangeZ,
+      ) * 0.84;
+
+    const centerX =
+      (worldMinX +
+        worldMaxX) /
+      2;
+
+    const centerZ =
+      (worldMinZ +
+        worldMaxZ) /
+      2;
+
+    const sx =
+      width / 2 +
+      (x - centerX) *
+        scale;
+
+    const sy =
+      height / 2 +
+      (z - centerZ) *
+        -scale;
+
+    return [
+      sx,
+      sy,
+    ];
+  }
+
+  function resizeCanvas(): void {
+    const rect =
+      canvas!.getBoundingClientRect();
+
+    const dpr =
+      Math.min(
+        window.devicePixelRatio ||
+          1,
+        2,
+      );
+
+    const width =
+      Math.max(
+        1,
+        Math.round(
+          rect.width *
+            dpr,
+        ),
+      );
+
+    const height =
+      Math.max(
+        1,
+        Math.round(
+          rect.height *
+            dpr,
+        ),
+      );
+
+    if (
+      canvas!.width !==
+        width ||
+      canvas!.height !==
+        height
+    ) {
+      canvas!.width =
+        width;
+
+      canvas!.height =
+        height;
+    }
+
+    ctx!.setTransform(
+      1,
+      0,
+      0,
+      1,
+      0,
+      0,
+    );
+  }
+
+  function clearCanvas(): void {
+    ctx!.fillStyle =
+      "#000";
+
+    ctx!.fillRect(
+      0,
+      0,
+      canvas!.width,
+      canvas!.height,
+    );
+  }
+
+  function drawGrid(): void {
+    const context =
+      ctx!;
+
+    const width =
+      canvas!.width;
+
+    const height =
+      canvas!.height;
+
+    const rangeX =
+      Math.max(
+        1,
+        worldMaxX -
+          worldMinX,
+      );
+
+    const rangeZ =
+      Math.max(
+        1,
+        worldMaxZ -
+          worldMinZ,
+      );
+
+    const gridStep =
+      Math.max(
+        1,
+        Math.ceil(
+          Math.max(
+            rangeX,
+            rangeZ,
+          ) / 20,
+        ),
+      );
+
+    context.save();
+
+    context.lineWidth =
+      1;
+
+    context.strokeStyle =
+      "#0a1b0a";
+
+    const startX =
+      Math.ceil(
+        worldMinX /
+          gridStep,
+      ) *
+      gridStep;
+
+    for (
+      let x = startX;
+      x <= worldMaxX;
+      x += gridStep
+    ) {
+      const [
+        sx1,
+        sy1,
+      ] =
+        worldToScreen(
+          x,
+          worldMinZ,
+        );
+
+      const [
+        sx2,
+        sy2,
+      ] =
+        worldToScreen(
+          x,
+          worldMaxZ,
+        );
+
+      context.beginPath();
+
+      context.moveTo(
+        sx1,
+        sy1,
+      );
+
+      context.lineTo(
+        sx2,
+        sy2,
+      );
+
+      context.stroke();
+    }
+
+    const startZ =
+      Math.ceil(
+        worldMinZ /
+          gridStep,
+      ) *
+      gridStep;
+
+    for (
+      let z = startZ;
+      z <= worldMaxZ;
+      z += gridStep
+    ) {
+      const [
+        sx1,
+        sy1,
+      ] =
+        worldToScreen(
+          worldMinX,
+          z,
+        );
+
+      const [
+        sx2,
+        sy2,
+      ] =
+        worldToScreen(
+          worldMaxX,
+          z,
+        );
+
+      context.beginPath();
+
+      context.moveTo(
+        sx1,
+        sy1,
+      );
+
+      context.lineTo(
+        sx2,
+        sy2,
+      );
+
+      context.stroke();
+    }
+
+    context.strokeStyle =
+      "#163316";
+
+    context.beginPath();
+
+    const [
+      axisX1,
+      axisY1,
+    ] =
+      worldToScreen(
+        0,
+        worldMinZ,
+      );
+
+    const [
+      axisX2,
+      axisY2,
+    ] =
+      worldToScreen(
+        0,
+        worldMaxZ,
+      );
+
+    context.moveTo(
+      axisX1,
+      axisY1,
+    );
+
+    context.lineTo(
+      axisX2,
+      axisY2,
+    );
+
+    context.stroke();
+
+    context.beginPath();
+
+    const [
+      axisZ1,
+      axisW1,
+    ] =
+      worldToScreen(
+        worldMinX,
+        0,
+      );
+
+    const [
+      axisZ2,
+      axisW2,
+    ] =
+      worldToScreen(
+        worldMaxX,
+        0,
+      );
+
+    context.moveTo(
+      axisZ1,
+      axisW1,
+    );
+
+    context.lineTo(
+      axisZ2,
+      axisW2,
+    );
+
+    context.stroke();
+
+    context.restore();
+  }
+
+  function drawObstacles(): void {
+    const context =
+      ctx!;
+
+    context.save();
+
+    context.fillStyle =
+      "rgba(255,34,34,0.10)";
+
+    context.strokeStyle =
+      "#ff2222";
+
+    context.lineWidth =
+      1;
+
+    /*
+     * Rust format:
+     *
+     * [center.x, center.y, center.z,
+     *  half.x,   half.y,   half.z,
+     *  material, reserved]
+     */
+    if (
+      obstacleBuffer.length >=
+      8
+    ) {
+      for (
+        let i = 0;
+        i + 7 <
+        obstacleBuffer.length;
+        i += 8
+      ) {
+        const centerX =
+          obstacleBuffer[
+            i
+          ];
+
+        const centerZ =
+          obstacleBuffer[
+            i + 2
+          ];
+
+        const halfX =
+          Math.abs(
+            obstacleBuffer[
+              i + 3
+            ],
+          );
+
+        const halfZ =
+          Math.abs(
+            obstacleBuffer[
+              i + 5
+            ],
+          );
+
+        const minX =
+          centerX - halfX;
+
+        const minZ =
+          centerZ - halfZ;
+
+        const maxX =
+          centerX + halfX;
+
+        const maxZ =
+          centerZ + halfZ;
+
+        const [
+          sx1,
+          sy1,
+        ] =
+          worldToScreen(
+            minX,
+            minZ,
+          );
+
+        const [
+          sx2,
+          sy2,
+        ] =
+          worldToScreen(
+            maxX,
+            maxZ,
+          );
+
+        const left =
+          Math.min(
+            sx1,
+            sx2,
+          );
+
+        const top =
+          Math.min(
+            sy1,
+            sy2,
+          );
+
+        const rectWidth =
+          Math.abs(
+            sx2 - sx1,
+          );
+
+        const rectHeight =
+          Math.abs(
+            sy2 - sy1,
+          );
+
+        context.fillRect(
+          left,
+          top,
+          rectWidth,
+          rectHeight,
+        );
+
+        context.strokeRect(
+          left,
+          top,
+          rectWidth,
+          rectHeight,
+        );
+      }
+    } else if (
+      obstacleBuffer.length >=
+      4
+    ) {
+      /*
+       * Legacy fallback:
+       *
+       * [minX, minZ, maxX, maxZ]
+       */
+      for (
+        let i = 0;
+        i + 3 <
+        obstacleBuffer.length;
+        i += 4
+      ) {
+        const [
+          sx1,
+          sy1,
+        ] =
+          worldToScreen(
+            obstacleBuffer[i],
+            obstacleBuffer[
+              i + 1
+            ],
+          );
+
+        const [
+          sx2,
+          sy2,
+        ] =
+          worldToScreen(
+            obstacleBuffer[
+              i + 2
+            ],
+            obstacleBuffer[
+              i + 3
+            ],
+          );
+
+        const left =
+          Math.min(
+            sx1,
+            sx2,
+          );
+
+        const top =
+          Math.min(
+            sy1,
+            sy2,
+          );
+
+        const rectWidth =
+          Math.abs(
+            sx2 - sx1,
+          );
+
+        const rectHeight =
+          Math.abs(
+            sy2 - sy1,
+          );
+
+        context.fillRect(
+          left,
+          top,
+          rectWidth,
+          rectHeight,
+        );
+
+        context.strokeRect(
+          left,
+          top,
+          rectWidth,
+          rectHeight,
+        );
+      }
+    }
+
+    context.restore();
+  }
+
+  function drawPath(): void {
+    if (
+      pathBuffer.length <
+      3
+    ) {
+      return;
+    }
+
+    const context =
+      ctx!;
+
+    context.save();
+
+    context.strokeStyle =
+      "#00dddd";
+
+    context.globalAlpha =
+      0.35;
+
+    context.lineWidth =
+      1;
+
+    context.beginPath();
+
+    let started =
+      false;
+
+    /*
+     * Rust path format:
+     *
+     * [x, y, z]
+     */
+    for (
+      let i = 0;
+      i + 2 <
+      pathBuffer.length;
+      i += 3
+    ) {
+      const x =
+        finite(
+          pathBuffer[i],
+        );
+
+      const z =
+        finite(
+          pathBuffer[
+            i + 2
+          ],
+        );
+
+      const [
+        sx,
+        sy,
+      ] =
+        worldToScreen(
+          x,
+          z,
+        );
+
+      if (!started) {
+        context.moveTo(
+          sx,
+          sy,
+        );
+
+        started =
+          true;
+      } else {
+        context.lineTo(
+          sx,
+          sy,
+        );
+      }
+    }
+
+    if (started) {
+      context.stroke();
+    }
+
+    context.restore();
+  }
+
+  function parseAgent(): {
+    x: number;
+    z: number;
+    heading: number;
+    speed: number;
+  } {
+    /*
+     * Rust:
+     *
+     * [x, y, z, heading, speed, radius, collision, success]
+     */
+    if (
+      agentBuffer.length >=
+      5
+    ) {
+      return {
+        x:
+          finite(
+            agentBuffer[0],
+          ),
+
+        z:
+          finite(
+            agentBuffer[2],
+          ),
+
+        heading:
+          finite(
+            agentBuffer[3],
+          ),
+
+        speed:
+          finite(
+            agentBuffer[4],
+          ),
+      };
+    }
+
+    if (
+      agentBuffer.length >=
+      4
+    ) {
+      return {
+        x:
+          finite(
+            agentBuffer[0],
+          ),
+
+        z:
+          finite(
+            agentBuffer[1],
+          ),
+
+        heading:
+          finite(
+            agentBuffer[2],
+          ),
+
+        speed:
+          finite(
+            agentBuffer[3],
+          ),
+      };
+    }
+
+    if (
+      agentBuffer.length >=
+      3
+    ) {
+      return {
+        x:
+          finite(
+            agentBuffer[0],
+          ),
+
+        z:
+          finite(
+            agentBuffer[2],
+          ),
+
+        heading:
+          0,
+
+        speed:
+          0,
+      };
+    }
+
+    return {
+      x: 0,
+      z: 0,
+      heading: 0,
+      speed: 0,
+    };
+  }
+
+  function parseTarget(): {
+    x: number;
+    z: number;
+  } {
+    /*
+     * Rust:
+     *
+     * [x, y, z, radius]
+     */
+    if (
+      targetBuffer.length >=
+      3
+    ) {
+      return {
+        x:
+          finite(
+            targetBuffer[0],
+          ),
+
+        z:
+          finite(
+            targetBuffer[2],
+          ),
+      };
+    }
+
+    if (
+      targetBuffer.length >=
+      2
+    ) {
+      return {
+        x:
+          finite(
+            targetBuffer[0],
+          ),
+
+        z:
+          finite(
+            targetBuffer[1],
+          ),
+      };
+    }
+
+    return {
+      x: 0,
+      z: 0,
+    };
+  }
+
+  function drawTarget(): void {
+    const target =
+      parseTarget();
+
+    const [
+      sx,
+      sy,
+    ] =
+      worldToScreen(
+        target.x,
+        target.z,
+      );
+
+    const context =
+      ctx!;
+
+    context.save();
+
+    context.strokeStyle =
+      "#00d400";
+
+    context.fillStyle =
+      "rgba(0,212,0,0.08)";
+
+    context.lineWidth =
+      1;
+
+    context.beginPath();
+
+    context.arc(
+      sx,
+      sy,
+      11,
+      0,
+      Math.PI * 2,
+    );
+
+    context.fill();
+    context.stroke();
+
+    context.beginPath();
+
+    context.moveTo(
+      sx - 16,
+      sy,
+    );
+
+    context.lineTo(
+      sx + 16,
+      sy,
+    );
+
+    context.moveTo(
+      sx,
+      sy - 16,
+    );
+
+    context.lineTo(
+      sx,
+      sy + 16,
+    );
+
+    context.stroke();
+
+    context.font =
+      "10px IBM Plex Mono, Courier New, monospace";
+
+    context.fillStyle =
+      "#00d400";
+
+    context.fillText(
+      "TARGET",
+      sx + 14,
+      sy - 12,
+    );
+
+    context.restore();
+  }
+
+  function drawSensors(
+    agent: {
+      x: number;
+      z: number;
+      heading: number;
+      speed: number;
+    },
+  ): void {
+    if (
+      sensorBuffer.length ===
+      0
+    ) {
+      return;
+    }
+
+    const context =
+      ctx!;
+
+    const count =
+      sensorBuffer.length;
+
+    const [
+      originX,
+      originY,
+    ] =
+      worldToScreen(
+        agent.x,
+        agent.z,
+      );
+
+    const maxWorldRange =
+      Math.max(
+        worldMaxX -
+          worldMinX,
+
+        worldMaxZ -
+          worldMinZ,
+      );
+
+    const maxSensorDistance =
+      Math.max(
+        1,
+        maxWorldRange *
+          0.45,
+      );
+
+    context.save();
+
+    for (
+      let i = 0;
+      i < count;
+      i += 1
+    ) {
+      const value =
+        Math.min(
+          1,
+          Math.max(
+            0,
+            finite(
+              sensorBuffer[i],
+            ),
+          ),
+        );
+
+      /*
+       * Rust sensor direction:
+       *
+       * x = sin(angle)
+       * z = cos(angle)
+       */
+      const angle =
+        agent.heading +
+        (i / count) *
+          Math.PI *
+          2;
+
+      const distance =
+        Math.max(
+          0.5,
+          value *
+            maxSensorDistance,
+        );
+
+      const endWorldX =
+        agent.x +
+        Math.sin(angle) *
+          distance;
+
+      const endWorldZ =
+        agent.z +
+        Math.cos(angle) *
+          distance;
+
+      const [
+        endX,
+        endY,
+      ] =
+        worldToScreen(
+          endWorldX,
+          endWorldZ,
+        );
+
+      context.globalAlpha =
+        0.20 +
+        (1 - value) *
+          0.70;
+
+      context.strokeStyle =
+        "#ff5fff";
+
+      context.lineWidth =
+        1;
+
+      context.beginPath();
+
+      context.moveTo(
+        originX,
+        originY,
+      );
+
+      context.lineTo(
+        endX,
+        endY,
+      );
+
+      context.stroke();
+    }
+
+    context.restore();
+  }
+
+  function drawAgent(): void {
+    const agent =
+      parseAgent();
+
+    const [
+      sx,
+      sy,
+    ] =
+      worldToScreen(
+        agent.x,
+        agent.z,
+      );
+
+    drawSensors(
+      agent,
+    );
+
+    const context =
+      ctx!;
+
+    context.save();
+
+    context.translate(
+      sx,
+      sy,
+    );
+
+    /*
+     * Rust world heading:
+     *
+     * x = sin(heading)
+     * z = cos(heading)
+     *
+     * Canvas coordinates invert Y.
+     *
+     * Therefore the screen-space angle from +X is:
+     *
+     * heading - PI/2
+     */
+    context.rotate(
+      agent.heading -
+        Math.PI / 2,
+    );
+
+    context.fillStyle =
+      "#00dddd";
+
+    context.strokeStyle =
+      "#fff";
+
+    context.lineWidth =
+      1;
+
+    context.beginPath();
+
+    context.moveTo(
+      12,
+      0,
+    );
+
+    context.lineTo(
+      -8,
+      -7,
+    );
+
+    context.lineTo(
+      -4,
+      0,
+    );
+
+    context.lineTo(
+      -8,
+      7,
+    );
+
+    context.closePath();
+
+    context.fill();
+    context.stroke();
+
+    context.restore();
+
+    context.save();
+
+    context.font =
+      "10px IBM Plex Mono, Courier New, monospace";
+
+    context.fillStyle =
+      "#00dddd";
+
+    context.fillText(
+      "AGENT",
+      sx + 13,
+      sy + 14,
+    );
+
+    context.fillStyle =
+      "#606060";
+
+    context.fillText(
+      `A${currentAction}`,
+      sx + 13,
+      sy + 26,
+    );
+
+    context.restore();
+  }
+
+  function drawStatusMark(): void {
+    const context =
+      ctx!;
+
+    const width =
+      canvas!.width;
+
+    context.save();
+
+    context.font =
+      "10px IBM Plex Mono, Courier New, monospace";
+
+    context.fillStyle =
+      "#505050";
+
+    context.fillText(
+      `SEED ${pad(
+        snapshot.seed,
+        10,
+      )}`,
+      10,
+      18,
+    );
+
+    context.fillText(
+      `EP ${pad(
+        snapshot.episode,
+        8,
+      )}`,
+      10,
+      32,
+    );
+
+    context.fillText(
+      `STEP ${pad(
+        snapshot.step,
+        8,
+      )}`,
+      10,
+      46,
+    );
+
+    context.fillText(
+      `EPS ${snapshot.epsilon.toFixed(
+        4,
+      )}`,
+      10,
+      60,
+    );
+
+    context.fillText(
+      `RWD ${snapshot.reward.toFixed(
+        4,
+      )}`,
+      10,
+      74,
+    );
+
+    const widthLabel =
+      `${Math.round(
+        width /
+          (window.devicePixelRatio ||
+            1),
+      )}PX`;
+
+    context.fillText(
+      widthLabel,
+      Math.max(
+        0,
+        width - 55,
+      ),
+      18,
+    );
+
+    context.restore();
+  }
+
+  function drawWorld(): void {
+    clearCanvas();
+    drawGrid();
+    drawObstacles();
+    drawPath();
+    drawTarget();
+    drawAgent();
+    drawStatusMark();
+  }
+
+  function runOneInferenceStep(): void {
+    if (
+      !engine ||
+      training ||
+      evaluation
+    ) {
+      return;
+    }
+
+    try {
+      currentAction =
+        clampInt(
+          engine.predict_action(),
+          0,
+          4,
+        );
+
+      const result =
+        safeBuffer(
+          engine.step(
+            currentAction,
+          ),
+        );
+
+      const reward =
+        finite(
+          result[0],
+        );
+
+      const done =
+        finite(
+          result[1],
+        ) > 0.5;
+
+      const success =
+        finite(
+          result[2],
+        ) > 0.5;
+
+      const collision =
+        finite(
+          result[3],
+        ) > 0.5;
+
+      const distance =
+        finite(
+          result[4],
+        );
+
+      /*
+       * The Rust manual step intentionally leaves the
+       * environment terminal so the result can be returned.
+       *
+       * Autonomous RUN must explicitly start the next
+       * episode after terminal state.
+       */
+      if (done) {
+        const terminalEpisode =
+          finite(
+            engine.current_episode(),
+          );
+
+        emit(
+          "raytracer:ai-episode",
+          {
+            episode:
+              terminalEpisode,
+
+            reward,
+
+            success,
+
+            collision,
+
+            distance,
+
+            action:
+              currentAction,
+          },
+        );
+
+        setMessage(
+          success
+            ? "TARGET REACHED / NEW EPISODE"
+            : collision
+              ? "COLLISION / NEW EPISODE"
+              : "EPISODE COMPLETE / NEW EPISODE",
+        );
+
+        engine.reset_environment(
+          0,
+        );
+
+        syncSnapshot();
+
+        return;
+      }
+    } catch (error) {
+      handleRuntimeError(
+        error,
+      );
+    }
+  }
+
+  function animationFrame(
+    timestamp: number,
+  ): void {
+    if (
+      destroyed
+    ) {
+      return;
+    }
+
+    if (
+      lastRenderTime > 0
+    ) {
+      const delta =
+        timestamp -
+        lastRenderTime;
+
+      if (
+        delta > 0
+      ) {
+        const instantaneous =
+          1000 /
+          delta;
+
+        fps =
+          fps * 0.90 +
+          instantaneous * 0.10;
+      }
+    }
+
+    lastRenderTime =
+      timestamp;
+
+    renderCount += 1;
+
+    if (
+      engine &&
+      initialized &&
+      runMode &&
+      !training &&
+      !evaluation
+    ) {
+      runOneInferenceStep();
+    }
+
+    if (
+      engine &&
+      renderCount % 6 ===
+        0
+    ) {
+      syncSnapshot();
+    }
+
+    drawWorld();
+
+    frameHandle =
+      requestAnimationFrame(
+        animationFrame,
+      );
+  }
+
+  function trainChunk(
+    count: number,
+  ): void {
+    if (!engine) {
+      return;
+    }
+
+    try {
+      engine.train_steps(
+        clampInt(
+          count,
+          1,
+          5000,
+        ),
+      );
+
+      snapshot.mode =
+        "TRAIN";
+
+      snapshot.state =
+        "RUNNING";
+
+      syncSnapshot();
+    } catch (error) {
+      handleRuntimeError(
+        error,
+      );
+    }
+  }
+
+  function trainOneEpisode(): void {
+    if (!engine) {
+      return;
+    }
+
+    try {
+      engine.train_episode();
+
+      snapshot.mode =
+        "TRAIN-EPISODE";
+
+      snapshot.state =
+        "RUNNING";
+
+      syncSnapshot();
+
+      emit(
+        "raytracer:training-episode",
+        {
+          episode:
+            snapshot.episode,
+
+          reward:
+            snapshot.episodeReward,
+
+          steps:
+            snapshot.episodeSteps,
+        },
+      );
+    } catch (error) {
+      handleRuntimeError(
+        error,
+      );
+    }
+  }
+
+  function startTrainingSteps(
+    count: number,
+  ): void {
+    if (!engine) {
+      setMessage(
+        "RUNTIME NOT READY",
+      );
+
+      return;
+    }
+
+    stopTraining(
+      false,
+    );
+
+    training =
+      true;
+
+    runMode =
+      false;
+
+    evaluation =
+      false;
+
+    let remaining =
+      clampInt(
+        count,
+        1,
+        1000000,
+      );
+
+    setMode(
+      "TRAIN",
+    );
+
+    setState(
+      "RUNNING",
+    );
+
+    setMessage(
+      `TRAINING ${remaining} STEPS`,
+    );
+
+    emit(
+      "raytracer:training-start",
+      {
+        source:
+          "renderer",
+
+        steps:
+          remaining,
+      },
+    );
+
+    const tick =
+      () => {
+        if (
+          destroyed ||
+          !training
+        ) {
+          return;
+        }
+
+        if (
+          remaining <=
+          0
+        ) {
+          training =
+            false;
+
+          clearTrainingTimer();
+
+          setMode(
+            "TRAIN",
+          );
+
+          setState(
+            "COMPLETE",
+          );
+
+          snapshot.status =
+            "TRAINING COMPLETE";
+
+          setMessage(
+            "STEP TRAINING COMPLETE",
+          );
+
+          emit(
+            "raytracer:training-complete",
+            {
+              source:
+                "renderer",
+            },
+          );
+
+          syncSnapshot();
+
+          return;
+        }
+
+        const chunk =
+          Math.min(
+            controlsState.trainChunk,
+            remaining,
+            1000,
+          );
+
+        trainChunk(
+          chunk,
+        );
+
+        remaining -=
+          chunk;
+
+        setMessage(
+          `TRAINING REMAINING ${remaining}`,
+        );
+
+        trainingTimer =
+          window.setTimeout(
+            tick,
+            0,
+          );
+      };
+
+    tick();
+  }
+
+  function startContinuousTraining(): void {
+    if (!engine) {
+      setMessage(
+        "RUNTIME NOT READY",
+      );
+
+      return;
+    }
+
+    stopTraining(
+      false,
+    );
+
+    training =
+      true;
+
+    runMode =
+      false;
+
+    evaluation =
+      false;
+
+    setMode(
+      "TRAIN",
+    );
+
+    setState(
+      "RUNNING",
+    );
+
+    snapshot.status =
+      "CONTINUOUS TRAINING";
+
+    setMessage(
+      "AI TRAINING STARTED",
+    );
+
+    emit(
+      "raytracer:training-start",
+      {
+        source:
+          "renderer",
+      },
+    );
+
+    const tick =
+      () => {
+        if (
+          destroyed ||
+          !training
+        ) {
+          return;
+        }
+
+        trainChunk(
+          Math.min(
+            controlsState.trainChunk,
+            1000,
+          ),
+        );
+
+        trainingTimer =
+          window.setTimeout(
+            tick,
+            0,
+          );
+      };
+
+    tick();
+  }
+
+  function startEpisodeTraining(
+    count: number,
+  ): void {
+    if (!engine) {
+      setMessage(
+        "RUNTIME NOT READY",
+      );
+
+      return;
+    }
+
+    stopTraining(
+      false,
+    );
+
+    training =
+      true;
+
+    runMode =
+      false;
+
+    evaluation =
+      false;
+
+    let remaining =
+      clampInt(
+        count,
+        1,
+        100000,
+      );
+
+    setMode(
+      "TRAIN-EPISODES",
+    );
+
+    setState(
+      "RUNNING",
+    );
+
+    setMessage(
+      `TRAINING ${remaining} EPISODES`,
+    );
+
+    emit(
+      "raytracer:training-start",
+      {
+        source:
+          "renderer",
+
+        episodes:
+          remaining,
+      },
+    );
+
+    const tick =
+      () => {
+        if (
+          destroyed ||
+          !training
+        ) {
+          return;
+        }
+
+        if (
+          remaining <=
+          0
+        ) {
+          training =
+            false;
+
+          clearTrainingTimer();
+
+          setMode(
+            "TRAIN-EPISODES",
+          );
+
+          setState(
+            "COMPLETE",
+          );
+
+          snapshot.status =
+            "EPISODE TRAINING COMPLETE";
+
+          setMessage(
+            "EPISODE TRAINING COMPLETE",
+          );
+
+          emit(
+            "raytracer:training-complete",
+            {
+              source:
+                "renderer",
+            },
+          );
+
+          syncSnapshot();
+
+          return;
+        }
+
+        trainOneEpisode();
+
+        remaining -=
+          1;
+
+        setMessage(
+          `TRAINING EPISODES REMAINING ${remaining}`,
+        );
+
+        trainingTimer =
+          window.setTimeout(
+            tick,
+            0,
+          );
+      };
+
+    tick();
+  }
+
+  function stopTraining(
+    emitEvent = true,
+  ): void {
+    const wasTraining =
+      training;
+
+    training =
+      false;
+
+    clearTrainingTimer();
+
+    if (
+      wasTraining ||
+      emitEvent
+    ) {
+      emit(
+        "raytracer:training-stop",
+        {
+          source:
+            "renderer",
+        },
+      );
+    }
+
+    if (
+      !destroyed
+    ) {
+      if (
+        wasTraining
+      ) {
+        setMode(
+          "STOP",
+        );
+
+        setState(
+          "STOPPED",
+        );
+
+        snapshot.status =
+          "TRAINING STOPPED";
+
+        setMessage(
+          "TRAINING STOPPED",
+        );
+      }
+
+      renderRuntime();
+    }
+  }
+
+  function runEvaluation(
+    count: number,
+  ): void {
+    if (!engine) {
+      setMessage(
+        "RUNTIME NOT READY",
+      );
+
+      return;
+    }
+
+    stopTraining(
+      false,
+    );
+
+    runMode =
+      false;
+
+    evaluation =
+      true;
+
+    const baseSeed =
+      (
+        snapshot.seed ||
+        1
+      ) + 100000;
+
+    setMode(
+      "EVAL",
+    );
+
+    setState(
+      "RUNNING",
+    );
+
+    snapshot.status =
+      `EVALUATING ${count}`;
+
+    setMessage(
+      `EVALUATING ${count} EPISODES`,
+    );
+
+    try {
+      const result =
+        safeBuffer(
+          engine.evaluate_episodes(
+            clampInt(
+              count,
+              1,
+              10000,
+            ),
+            baseSeed,
+          ),
+        );
+
+      const average =
+        result.length >
+        0
+          ? result.reduce(
+              (
+                total,
+                value,
+              ) =>
+                total +
+                finite(
+                  value,
+                ),
+              0,
+            ) /
+            result.length
+          : 0;
+
+      snapshot.status =
+        `EVAL AVG ${average.toFixed(
+          6,
+        )}`;
+
+      setMessage(
+        `EVALUATION COMPLETE / AVG ${average.toFixed(
+          6,
+        )}`,
+      );
+
+      emit(
+        "raytracer:ai-eval",
+        {
+          count,
+          baseSeed,
+          results:
+            result,
+          average,
+        },
+      );
+    } catch (error) {
+      handleRuntimeError(
+        error,
+      );
+    } finally {
+      evaluation =
+        false;
+
+      setMode(
+        "EVAL",
+      );
+
+      setState(
+        "COMPLETE",
+      );
+
+      syncSnapshot();
+    }
+  }
+
+  function resetAI(): void {
+    if (!engine) {
+      return;
+    }
+
+    stopTraining(
+      false,
+    );
+
+    runMode =
+      false;
+
+    evaluation =
+      false;
+
+    engine.reset_ai();
+
+    setMode(
+      "AI-RESET",
+    );
+
+    setState(
+      "COMPLETE",
+    );
+
+    snapshot.status =
+      "AI RESET COMPLETE";
+
+    setMessage(
+      "AI NETWORK + REPLAY RESET",
+    );
+
+    syncSnapshot();
+  }
+
+  function resetEnvironment(
+    requestedSeed?: unknown,
+  ): void {
+    if (!engine) {
+      return;
+    }
+
+    stopTraining(
+      false,
+    );
+
+    runMode =
+      false;
+
+    evaluation =
+      false;
+
+    const seed =
+      requestedSeed ===
+        undefined
+        ? (
+            Date.now() >>>
+            0
+          )
+        : Math.max(
+            0,
+            integer(
+              requestedSeed,
+            ),
+          );
+
+    engine.reset_environment(
+      seed,
+    );
+
+    setMode(
+      "ENV-RESET",
+    );
+
+    setState(
+      "COMPLETE",
+    );
+
+    snapshot.status =
+      "ENVIRONMENT RESET";
+
+    setMessage(
+      `ENVIRONMENT RESET / SEED ${seed}`,
+    );
+
+    syncSnapshot();
+  }
+
+  function hardReset(): void {
+    if (!engine) {
+      return;
+    }
+
+    stopTraining(
+      false,
+    );
+
+    runMode =
+      false;
+
+    evaluation =
+      false;
+
+    engine.hard_reset();
+
+    setMode(
+      "HARD-RESET",
+    );
+
+    setState(
+      "COMPLETE",
+    );
+
+    snapshot.status =
+      "HARD RESET COMPLETE";
+
+    setMessage(
+      "AI + ENVIRONMENT HARD RESET",
+    );
+
+    syncSnapshot();
+  }
+
+  function executeAICommand(
+    detail: Record<
+      string,
+      unknown
+    >,
+  ): void {
+    if (
+      !engine
+    ) {
+      setMessage(
+        "RUNTIME NOT READY",
+      );
+
+      return;
+    }
+
+    const action =
+      upper(
+        detail.action,
+      );
+
+    const count =
+      clampInt(
+        detail.count,
+        1,
+        1000000,
+      );
+
+    switch (
+      action
+    ) {
+      case "STATUS": {
+        syncSnapshot();
+        return;
+      }
+
+      case "STEP": {
+        stopTraining(
+          false,
+        );
+
+        runMode =
+          false;
+
+        evaluation =
+          false;
+
+        currentAction =
+          clampInt(
+            engine.predict_action(),
+            0,
+            4,
+          );
+
+        const result =
+          safeBuffer(
+            engine.step(
+              currentAction,
+            ),
+          );
+
+        const done =
+          finite(
+            result[1],
+          ) > 0.5;
+
+        setMode(
+          "STEP",
+        );
+
+        setState(
+          "COMPLETE",
+        );
+
+        snapshot.status =
+          "AI STEP COMPLETE";
+
+        setMessage(
+          `AI STEP / ACTION ${
+            ACTION_NAMES[
+              currentAction
+            ] ??
+            currentAction
+          }`,
+        );
+
+        if (done) {
+          emit(
+            "raytracer:ai-episode",
+            {
+              episode:
+                finite(
+                  engine.current_episode(),
+                ),
+
+              reward:
+                finite(
+                  result[0],
+                ),
+
+              success:
+                finite(
+                  result[2],
+                ) > 0.5,
+
+              collision:
+                finite(
+                  result[3],
+                ) > 0.5,
+
+              distance:
+                finite(
+                  result[4],
+                ),
+
+              action:
+                currentAction,
+            },
+          );
+        }
+
+        syncSnapshot();
+
+        return;
+      }
+
+      case "TRAIN_STEPS": {
+        startTrainingSteps(
+          count,
+        );
+
+        return;
+      }
+
+      case "TRAIN_EPISODES": {
+        startEpisodeTraining(
+          count,
+        );
+
+        return;
+      }
+
+      case "START_TRAINING": {
+        startContinuousTraining();
+
+        return;
+      }
+
+      case "EVALUATE": {
+        runEvaluation(
+          count,
+        );
+
+        return;
+      }
+
+      case "RESET_AI": {
+        resetAI();
+
+        return;
+      }
+
+      case "RESET_ENVIRONMENT": {
+        resetEnvironment(
+          detail.seed,
+        );
+
+        return;
+      }
+
+      case "HARD_RESET": {
+        hardReset();
+
+        return;
+      }
+
+      case "RUN": {
+        stopTraining(
+          false,
+        );
+
+        evaluation =
+          false;
+
+        runMode =
+          true;
+
+        setMode(
+          "RUN",
+        );
+
+        setState(
+          "RUNNING",
+        );
+
+        snapshot.status =
+          "AUTONOMOUS RUN";
+
+        setMessage(
+          "AUTONOMOUS NAVIGATION ACTIVE",
+        );
+
+        syncSnapshot();
+
+        return;
+      }
+
+      case "STOP": {
+        stopTraining();
+
+        runMode =
+          false;
+
+        evaluation =
+          false;
+
+        setMode(
+          "STOP",
+        );
+
+        setState(
+          "STOPPED",
+        );
+
+        snapshot.status =
+          "RUNTIME STOPPED";
+
+        setMessage(
+          "RUNTIME STOPPED",
+        );
+
+        syncSnapshot();
+
+        return;
+      }
+
+      case "SAVE_MODEL": {
+        try {
+          const data =
+            engine.save_model();
+
+          localStorage.setItem(
+            "raytrc.ai.model",
+            data,
+          );
+
+          snapshot.status =
+            "MODEL SAVED";
+
+          setMessage(
+            "MODEL SAVED TO LOCAL STORAGE",
+          );
+
+          syncSnapshot();
+        } catch (error) {
+          handleRuntimeError(
+            error,
+          );
+        }
+
+        return;
+      }
+
+      case "LOAD_MODEL": {
+        try {
+          const data =
+            localStorage.getItem(
+              "raytrc.ai.model",
+            );
+
+          if (
+            !data
+          ) {
+            setMessage(
+              "NO SAVED MODEL FOUND",
+            );
+
+            return;
+          }
+
+          const loaded =
+            engine.load_model(
+              data,
+            );
+
+          snapshot.status =
+            loaded
+              ? "MODEL LOADED"
+              : "MODEL LOAD REJECTED";
+
+          setMessage(
+            loaded
+              ? "MODEL LOADED"
+              : "MODEL LOAD REJECTED",
+          );
+
+          syncSnapshot();
+        } catch (error) {
+          handleRuntimeError(
+            error,
+          );
+        }
+
+        return;
+      }
+
+      case "EXPORT_MODEL": {
+        try {
+          const data =
+            engine.export_model();
+
+          downloadText(
+            data,
+            "raytrc-ai-model.txt",
+          );
+
+          snapshot.status =
+            "MODEL EXPORTED";
+
+          setMessage(
+            "MODEL EXPORTED",
+          );
+        } catch (error) {
+          handleRuntimeError(
+            error,
+          );
+        }
+
+        return;
+      }
+
+      case "IMPORT_MODEL": {
+        openModelFilePicker();
+
+        return;
+      }
+
+      default:
+        setMessage(
+          `UNKNOWN AI ACTION: ${action}`,
+        );
+    }
+  }
+
+  function openModelFilePicker(): void {
+    if (!engine) {
+      return;
+    }
+
+    const input =
+      document.createElement(
+        "input",
+      );
+
+    input.type =
+      "file";
+
+    input.accept =
+      ".txt,.json,.model,text/plain,application/json";
+
+    input.addEventListener(
+      "change",
+      async () => {
+        const file =
+          input.files?.[0];
+
+        if (
+          !file ||
+          !engine
+        ) {
+          return;
+        }
+
+        try {
+          const data =
+            await file.text();
+
+          const imported =
+            engine.import_model(
+              data,
+            );
+
+          snapshot.status =
+            imported
+              ? "MODEL IMPORTED"
+              : "MODEL IMPORT REJECTED";
+
+          setMessage(
+            imported
+              ? "MODEL IMPORTED"
+              : "MODEL IMPORT REJECTED",
+          );
+
+          syncSnapshot();
+        } catch (error) {
+          handleRuntimeError(
+            error,
+          );
+        }
+      },
+    );
+
+    input.click();
+  }
+
+  function downloadText(
+    text: string,
+    filename: string,
+  ): void {
+    const blob =
+      new Blob(
+        [text],
+        {
+          type:
+            "text/plain;charset=utf-8",
+        },
+      );
+
+    const url =
+      URL.createObjectURL(
+        blob,
+      );
+
+    const anchor =
+      document.createElement(
+        "a",
+      );
+
+    anchor.href =
+      url;
+
+    anchor.download =
+      filename;
+
+    document.body.appendChild(
+      anchor,
+    );
+
+    anchor.click();
+
+    anchor.remove();
+
+    window.setTimeout(
+      () => {
+        URL.revokeObjectURL(
+          url,
+        );
+      },
+      1000,
+    );
+  }
+
+  function handleRuntimeError(
+    error: unknown,
+  ): void {
+    const message =
+      error instanceof Error
+        ? error.message
+        : String(
+            error,
+          );
+
+    snapshot.mode =
+      "ERROR";
+
+    snapshot.state =
+      "ERROR";
+
+    snapshot.status =
+      message;
+
+    setMode(
+      "ERROR",
+    );
+
+    setState(
+      "ERROR",
+    );
+
+    setMessage(
+      message,
+    );
+
+    renderRuntime();
+
+    emit(
+      "raytracer:ai-error",
+      {
+        error:
+          message,
+      },
+    );
+  }
+
+  /*
+   * IMPORTANT:
+   *
+   * Do not write:
+   *
+   *   import(WASM_JS_URL)
+   *
+   * here.
+   *
+   * The generated wasm-bindgen glue is inside public/wasm.
+   * Vite must not add it to the source module graph.
+   *
+   * Native import() is invoked indirectly through Function()
+   * so the browser resolves the final absolute URL itself.
+   */
+  async function importPublicWasmModule(
+    url: string,
+  ): Promise<WasmModule> {
+    const nativeImport =
+      new Function(
+        "url",
+        "return import(url);",
+      ) as (
+        url: string,
+      ) => Promise<WasmModule>;
+
+    return nativeImport(
+      url,
+    );
+  }
+
+  async function loadWasm(): Promise<void> {
+    if (
+      wasmReady
+    ) {
+      return;
+    }
+
+    setMode(
+      "WASM-LOAD",
+    );
+
+    setState(
+      "LOADING",
+    );
+
+    snapshot.status =
+      "LOADING WASM";
+
+    setMessage(
+      "LOADING RUST WASM ENGINE",
+    );
+
+    try {
+      /*
+       * Verify that the public static file really exists.
+       * This gives a much better runtime error than a module
+       * resolution error.
+       */
+      const response =
+        await fetch(
+          WASM_JS_URL,
+          {
+            cache:
+              "no-store",
+          },
+        );
+
+      if (
+        !response.ok
+      ) {
+        throw new Error(
+          `WASM JS HTTP ${response.status}: ${WASM_JS_URL}`,
+        );
+      }
+
+      const contentType =
+        (
+          response.headers.get(
+            "content-type",
+          ) || ""
+        ).toLowerCase();
+
+      if (
+        contentType.includes(
+          "text/html",
+        )
+      ) {
+        throw new Error(
+          `WASM JS URL returned HTML instead of JavaScript: ${WASM_JS_URL}`,
+        );
+      }
+
+      /*
+       * Native browser module import.
+       */
+      const imported =
+        await importPublicWasmModule(
+          WASM_JS_URL,
+        );
+
+      wasmModule =
+        imported;
+
+      if (
+        typeof imported.default !==
+          "function"
+      ) {
+        throw new Error(
+          "WASM GLUE INVALID: DEFAULT INITIALIZER NOT FOUND",
+        );
+      }
+
+      if (
+        typeof imported.RayTracerEngine !==
+          "function"
+      ) {
+        throw new Error(
+          "WASM GLUE INVALID: RayTracerEngine NOT FOUND",
+        );
+      }
+
+      await imported.default();
+
+      engine =
+        new imported.RayTracerEngine();
+
+      wasmReady =
+        true;
+
+      initialized =
+        true;
+
+      snapshot.backend =
+        engine.backend();
+
+      snapshot.version =
+        engine.version();
+
+      snapshot.sensorCount =
+        engine.sensor_count();
+
+      snapshot.observationSize =
+        engine.observation_size();
+
+      snapshot.actionCount =
+        engine.action_count();
+
+      snapshot.parameterCount =
+        engine.model_parameter_count();
+
+      snapshot.status =
+        "WASM READY";
+
+      setMode(
+        "READY",
+      );
+
+      setState(
+        "IDLE",
+      );
+
+      setMessage(
+        "RUST WASM ENGINE READY",
+      );
+
+      applyControls(
+        controlsState,
+      );
+
+      syncSnapshot();
+
+      emit(
+        "raytracer:gpu",
+        {
+          available:
+            "gpu" in navigator,
+
+          adapter:
+            "RUST WASM / CANVAS",
+
+          device:
+            "RUST WASM",
+
+          uniformBytes:
+            0,
+
+          framebufferBytes:
+            canvas!.width *
+            canvas!.height *
+            4,
+        },
+      );
+
+      emit(
+        "raytracer:renderer-ready",
+        {
+          backend:
+            snapshot.backend,
+
+          version:
+            snapshot.version,
+        },
+      );
+    } catch (error) {
+      wasmReady =
+        false;
+
+      initialized =
+        false;
+
+      engine =
+        null;
+
+      const reason =
+        error instanceof Error
+          ? error.message
+          : String(
+              error,
+            );
+
+      handleRuntimeError(
+        new Error(
+          `WASM LOAD FAILED: ${reason}`,
+        ),
+      );
+    }
+  }
+
+  function handleControls(
+    event: Event,
+  ): void {
+    const detail =
+      (
+        event as CustomEvent<{
+          state?:
+            Partial<ControlsState>;
+        }>
+      ).detail;
+
+    if (
+      detail?.state
+    ) {
+      applyControls(
+        detail.state,
+      );
+    }
+  }
+
+  function handleControlsReset(): void {
+    controlsState = {
+      ...controlsState,
+
+      difficulty:
+        3,
+
+      obstacles:
+        12,
+
+      episodeSteps:
+        1000,
+
+      learningRate:
+        0.001,
+
+      gamma:
+        0.99,
+
+      batchSize:
+        64,
+
+      epsilon:
+        1,
+
+      epsilonMin:
+        0.05,
+
+      epsilonDecay:
+        0.995,
+
+      targetUpdate:
+        1000,
+
+      trainChunk:
+        250,
+    };
+
+    if (
+      engine
+    ) {
+      applyControls(
+        controlsState,
+      );
+    }
+  }
+
+  function handleRun(): void {
+    if (
+      !engine
+    ) {
+      setMessage(
+        "RUNTIME NOT READY",
+      );
+
+      return;
+    }
+
+    stopTraining(
+      false,
+    );
+
+    evaluation =
+      false;
+
+    runMode =
+      true;
+
+    setMode(
+      "RUN",
+    );
+
+    setState(
+      "RUNNING",
+    );
+
+    snapshot.status =
+      "AUTONOMOUS RUN";
+
+    setMessage(
+      "AUTONOMOUS NAVIGATION ACTIVE",
+    );
+
+    syncSnapshot();
+  }
+
+  function handleStop(): void {
+    stopTraining();
+
+    runMode =
+      false;
+
+    evaluation =
+      false;
+
+    setMode(
+      "STOP",
+    );
+
+    setState(
+      "STOPPED",
+    );
+
+    snapshot.status =
+      "STOPPED";
+
+    setMessage(
+      "RUNTIME STOPPED",
+    );
+
+    syncSnapshot();
+  }
+
+  function handleRenderRequest(): void {
+    drawWorld();
+
+    setMode(
+      "VIEW",
+    );
+
+    setState(
+      "COMPLETE",
+    );
+
+    snapshot.status =
+      "WORLD REFRESHED";
+
+    setMessage(
+      "WORLD VIEW REFRESHED",
+    );
+
+    syncSnapshot();
+  }
+
+  function handleView(): void {
+    drawWorld();
+
+    setMode(
+      "VIEW",
+    );
+
+    setState(
+      "IDLE",
+    );
+
+    snapshot.status =
+      "VIEW REQUESTED";
+
+    setMessage(
+      "VIEW REQUEST RECEIVED",
+    );
+
+    renderRuntime();
+  }
+
+  function handleBenchmark(): void {
+    emit(
+      "raytracer:benchmark-open",
+      {
+        source:
+          "renderer",
+      },
+    );
+  }
+
+  function handleExternalAI(
+    event: Event,
+  ): void {
+    const detail =
+      (
+        event as CustomEvent<
+          Record<
+            string,
+            unknown
+          >
+        >
+      ).detail ?? {};
+
+    executeAICommand(
+      detail,
+    );
+  }
+
+  window.addEventListener(
+    "resize",
+    resizeCanvas,
+  );
+
+  window.addEventListener(
+    "raytracer:controls",
+    handleControls,
+  );
+
+  /*
+   * Controls emits controls-apply after APPLY.
+   * We deliberately do NOT listen to both controls and
+   * controls-apply with the same handler because that can
+   * apply the same state twice.
+   */
+  window.addEventListener(
+    "raytracer:controls-reset",
+    handleControlsReset,
+  );
+
+  window.addEventListener(
+    "raytracer:run",
+    handleRun,
+  );
+
+  window.addEventListener(
+    "raytracer:stop",
+    handleStop,
+  );
+
+  window.addEventListener(
+    "raytracer:render-request",
+    handleRenderRequest,
+  );
+
+  window.addEventListener(
+    "raytracer:view",
+    handleView,
+  );
+
+  window.addEventListener(
+    "raytracer:bench",
+    handleBenchmark,
+  );
+
+  /*
+   * IMPORTANT:
+   * Only listen to raytracer:ai.
+   *
+   * Controls.astro also emits raytracer:ai-command for
+   * compatibility. Listening to both would execute every
+   * AI operation twice.
+   */
+  window.addEventListener(
+    "raytracer:ai",
+    handleExternalAI,
+  );
+
+  window.addEventListener(
+    "raytracer:training-stop",
+    () => {
+      if (
+        training
+      ) {
+        stopTraining(
+          false,
+        );
+      }
+    },
+  );
+
+  window.addEventListener(
+    "beforeunload",
+    () => {
+      destroyed =
+        true;
+
+      training =
+        false;
+
+      clearTrainingTimer();
+
+      if (
+        frameHandle
+      ) {
+        cancelAnimationFrame(
+          frameHandle,
+        );
+      }
+    },
+  );
+
+  const api = {
+    getEngine(): Engine | null {
+      return engine;
+    },
+
+    isReady(): boolean {
+      return (
+        wasmReady &&
+        !!engine
+      );
+    },
+
+    getState(): RuntimeSnapshot {
+      return {
+        ...snapshot,
+      };
+    },
+
+    getBuffers(): {
+      sensors: number[];
+      agent: number[];
+      target: number[];
+      obstacles: number[];
+      path: number[];
+    } {
+      return {
+        sensors: [
+          ...sensorBuffer,
+        ],
+
+        agent: [
+          ...agentBuffer,
+        ],
+
+        target: [
+          ...targetBuffer,
+        ],
+
+        obstacles: [
+          ...obstacleBuffer,
+        ],
+
+        path: [
+          ...pathBuffer,
+        ],
+      };
+    },
+
+    run(): void {
+      handleRun();
+    },
+
+    stop(): void {
+      handleStop();
+    },
+
+    train(
+      steps =
+        controlsState.trainChunk,
+    ): void {
+      startTrainingSteps(
+        steps,
+      );
+    },
+
+    trainEpisodes(
+      count = 1,
+    ): void {
+      startEpisodeTraining(
+        count,
+      );
+    },
+
+    evaluate(
+      count = 10,
+    ): void {
+      runEvaluation(
+        count,
+      );
+    },
+
+    step(): void {
+      executeAICommand(
+        {
+          action:
+            "STEP",
+        },
+      );
+    },
+
+    resetAI(): void {
+      executeAICommand(
+        {
+          action:
+            "RESET_AI",
+        },
+      );
+    },
+
+    resetEnvironment(
+      seed =
+        Date.now() >>> 0,
+    ): void {
+      executeAICommand(
+        {
+          action:
+            "RESET_ENVIRONMENT",
+
+          seed,
+        },
+      );
+    },
+
+    hardReset(): void {
+      executeAICommand(
+        {
+          action:
+            "HARD_RESET",
+        },
+      );
+    },
+
+    saveModel(): void {
+      executeAICommand(
+        {
+          action:
+            "SAVE_MODEL",
+        },
+      );
+    },
+
+    loadModel(): void {
+      executeAICommand(
+        {
+          action:
+            "LOAD_MODEL",
+        },
+      );
+    },
+
+    exportModel(): void {
+      executeAICommand(
+        {
+          action:
+            "EXPORT_MODEL",
+        },
+      );
+    },
+
+    importModel(): void {
+      executeAICommand(
+        {
+          action:
+            "IMPORT_MODEL",
+        },
+      );
+    },
+
+    refresh(): void {
+      syncSnapshot();
+      drawWorld();
+    },
+  };
+
+  (
+    window as typeof window & {
+      RayTracerRenderer?:
+        typeof api;
+    }
+  ).RayTracerRenderer =
+    api;
+
+  resizeCanvas();
+
+  renderRuntime();
+
+  setMode(
+    "WASM-LOAD",
+  );
+
+  setState(
+    "LOADING",
+  );
+
+  setMessage(
+    "LOADING RUST WASM ENGINE",
+  );
+
+  loadWasm().catch(
+    handleRuntimeError,
+  );
+
+  frameHandle =
+    requestAnimationFrame(
+      animationFrame,
+    );
+</script>
