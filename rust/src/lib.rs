@@ -2497,6 +2497,14 @@ pub struct RayTracerEngine {
     last_reward: f32,
 
     last_action: u32,
+
+    // Terminal event from the most recently completed episode.
+    // Kept separately from Environment so training can reset immediately
+    // without losing the outcome that just happened.
+    last_terminal_done: bool,
+    last_terminal_success: bool,
+    last_terminal_collision: bool,
+    last_terminal_distance: f32,
 }
 
 
@@ -2594,6 +2602,18 @@ impl RayTracerEngine {
 
             last_action:
                 0,
+
+            last_terminal_done:
+                false,
+
+            last_terminal_success:
+                false,
+
+            last_terminal_collision:
+                false,
+
+            last_terminal_distance:
+                0.0,
         }
     }
 
@@ -2605,14 +2625,14 @@ impl RayTracerEngine {
     pub fn version(
         &self,
     ) -> String {
-        "RAYTRC.AI.NAV/1.0.0"
+        "RAYTRC.AI.NAV/1.1.0"
             .to_string()
     }
 
     pub fn backend(
         &self,
     ) -> String {
-        "RUST + WASM + DQN + RAY SENSORS"
+        "RUST + WASM + DQN + 32-RAY SENSORS"
             .to_string()
     }
 
@@ -2708,6 +2728,18 @@ impl RayTracerEngine {
 
         self.last_action =
             0;
+
+        self.last_terminal_done =
+            false;
+
+        self.last_terminal_success =
+            false;
+
+        self.last_terminal_collision =
+            false;
+
+        self.last_terminal_distance =
+            0.0;
     }
 
 
@@ -2728,6 +2760,120 @@ impl RayTracerEngine {
 
         self.last_reward =
             0.0;
+
+        self.last_terminal_done =
+            false;
+
+        self.last_terminal_success =
+            false;
+
+        self.last_terminal_collision =
+            false;
+
+        self.last_terminal_distance =
+            self.environment.last_distance;
+    }
+
+
+    // =========================================================================
+    // COLLISION RECOVERY / SAME MAP
+    // =========================================================================
+    //
+    // Used by the foreground autonomous preview. A collision is a terminal
+    // training event, but the visual RUN mode should not freeze or generate a
+    // different map. Restart the agent on the SAME map instead.
+    //
+    // This deliberately preserves:
+    //   - seed
+    //   - obstacles
+    //   - target
+    //   - difficulty
+    //   - configured obstacle count
+    //
+    // and only resets the agent/episode-local state.
+    // =========================================================================
+
+    pub fn recover_from_collision(
+        &mut self,
+    ) {
+        if !self.environment.done ||
+           !self.environment.collision
+        {
+            return;
+        }
+
+        let dx =
+            self.environment.target.x -
+            self.environment.start.x;
+
+        let dz =
+            self.environment.target.z -
+            self.environment.start.z;
+
+        let target_heading =
+            dz.atan2(dx);
+
+        self.environment.step =
+            0;
+
+        self.environment.episode_reward =
+            0.0;
+
+        self.environment.done =
+            false;
+
+        self.environment.success =
+            false;
+
+        self.environment.collision =
+            false;
+
+        self.environment.agent =
+            Agent {
+                position: Vec3::new(
+                    self.environment.start.x,
+                    0.5,
+                    self.environment.start.z,
+                ),
+
+                heading:
+                    target_heading -
+                    PI * 0.5,
+
+                speed: 0.0,
+            };
+
+        self.environment.path.clear();
+
+        self.environment.path.push(
+            self.environment.agent.position,
+        );
+
+        self.environment.last_distance =
+            self.environment.agent.position
+                .distance_xz(
+                    self.environment.target,
+                );
+
+        self.environment.update_sensors();
+
+        self.last_action =
+            0;
+
+        self.last_reward =
+            0.0;
+
+        self.last_terminal_done =
+            false;
+
+        self.last_terminal_success =
+            false;
+
+        self.last_terminal_collision =
+            false;
+
+        self.last_terminal_distance =
+            self.environment.last_distance;
     }
 
 
@@ -2943,6 +3089,12 @@ impl RayTracerEngine {
         self.completed_episodes
     }
 
+    pub fn training_step_count(
+        &self,
+    ) -> u64 {
+        self.training_steps
+    }
+
     pub fn is_done(
         &self,
     ) -> bool {
@@ -2959,6 +3111,30 @@ impl RayTracerEngine {
         &self,
     ) -> bool {
         self.environment.collision
+    }
+
+    pub fn last_terminal_done(
+        &self,
+    ) -> bool {
+        self.last_terminal_done
+    }
+
+    pub fn last_terminal_success(
+        &self,
+    ) -> bool {
+        self.last_terminal_success
+    }
+
+    pub fn last_terminal_collision(
+        &self,
+    ) -> bool {
+        self.last_terminal_collision
+    }
+
+    pub fn last_terminal_distance(
+        &self,
+    ) -> f32 {
+        self.last_terminal_distance
     }
 
     pub fn epsilon(
@@ -3122,6 +3298,48 @@ impl RayTracerEngine {
                     ACTION_COUNT - 1
                 );
 
+        /*
+         * TERMINAL STATES ARE STICKY.
+         *
+         * A manual/preview step after SUCCESS or COLLISION must never:
+         *   - move the agent,
+         *   - generate a second episode,
+         *   - increment completed_episodes again,
+         *   - silently create a new map.
+         *
+         * The UI explicitly calls reset_environment() / RUN to begin
+         * the next episode.
+         */
+        if self.environment.done {
+            self.last_action =
+                action as u32;
+
+            self.last_reward =
+                0.0;
+
+            return vec![
+                0.0,
+
+                1.0,
+
+                if self.environment.success {
+                    1.0
+                } else {
+                    0.0
+                },
+
+                if self.environment.collision {
+                    1.0
+                } else {
+                    0.0
+                },
+
+                self.environment.last_distance,
+
+                action as f32,
+            ];
+        }
+
         let result =
             self.environment.step(
                 action
@@ -3134,6 +3352,10 @@ impl RayTracerEngine {
             result.reward;
 
         if result.done {
+            self.record_terminal_result(
+                result
+            );
+
             self.finish_episode(
                 result
             );
@@ -3261,10 +3483,19 @@ impl RayTracerEngine {
         // ---------------------------------------------------------------------
 
         if result.done {
+            self.record_terminal_result(
+                result
+            );
+
             self.finish_episode(
                 result
             );
 
+            /*
+             * TRAINING episodes automatically continue on the next
+             * environment. This is intentionally different from the
+             * manual/preview step() API, which holds terminal maps.
+             */
             self.environment.reset(0);
         }
 
@@ -4310,6 +4541,28 @@ impl RayTracerEngine {
 
 
     // =========================================================================
+    // INTERNAL: RECORD TERMINAL RESULT
+    // =========================================================================
+
+    fn record_terminal_result(
+        &mut self,
+        result: StepResult,
+    ) {
+        self.last_terminal_done =
+            result.done;
+
+        self.last_terminal_success =
+            result.success;
+
+        self.last_terminal_collision =
+            result.collision;
+
+        self.last_terminal_distance =
+            result.distance_to_target;
+    }
+
+
+    // =========================================================================
     // INTERNAL: EPISODE FINISH
     // =========================================================================
 
@@ -4616,6 +4869,51 @@ mod tests {
             )
         );
     }
+
+    #[test]
+    fn terminal_result_is_recorded_without_double_counting() {
+        let mut engine =
+            RayTracerEngine::new();
+
+        engine.environment.done =
+            true;
+
+        engine.environment.success =
+            true;
+
+        engine.environment.collision =
+            false;
+
+        engine.environment.last_distance =
+            0.25;
+
+        let before =
+            engine.current_episode();
+
+        let result =
+            engine.step(0);
+
+        assert_eq!(
+            result[0],
+            0.0
+        );
+
+        assert_eq!(
+            result[1],
+            1.0
+        );
+
+        assert_eq!(
+            result[2],
+            1.0
+        );
+
+        assert_eq!(
+            engine.current_episode(),
+            before
+        );
+    }
+
 
     #[test]
     fn model_export_import_roundtrip() {

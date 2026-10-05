@@ -6,6 +6,12 @@
   class="renderer"
 >
   <canvas
+    id="gpu-canvas"
+    class="gpu-canvas"
+    aria-label="RayTracer WebGPU background"
+  ></canvas>
+
+  <canvas
     id="world-canvas"
     class="world-canvas"
     aria-label="RayTracer AI navigation world"
@@ -75,13 +81,23 @@
       monospace;
   }
 
+  .gpu-canvas,
   .world-canvas {
     position: absolute;
     inset: 0;
     display: block;
     width: 100%;
     height: 100%;
+  }
+
+  .gpu-canvas {
+    z-index: 0;
     background: #000;
+  }
+
+  .world-canvas {
+    z-index: 1;
+    background: transparent;
     image-rendering: pixelated;
   }
 
@@ -278,6 +294,7 @@
 </style>
 
 <script>
+  // @ts-nocheck
   type Engine = {
     version(): string;
     backend(): string;
@@ -288,6 +305,7 @@
 
     reset_ai(): void;
     reset_environment(seed: number): void;
+    recover_from_collision(): void;
     hard_reset(): void;
 
     set_difficulty(value: number): void;
@@ -304,9 +322,14 @@
     current_seed(): number;
     current_step(): number;
     current_episode(): number | bigint;
+    training_step_count?: () => number | bigint;
     is_done(): boolean;
     is_success(): boolean;
     is_collision(): boolean;
+    last_terminal_done?: () => boolean;
+    last_terminal_success?: () => boolean;
+    last_terminal_collision?: () => boolean;
+    last_terminal_distance?: () => number;
     epsilon(): number;
     learning_rate(): number;
     gamma(): number;
@@ -409,6 +432,7 @@
 
     seed: number;
     step: number;
+    trainingSteps: number;
     episode: number;
     episodeSteps: number;
 
@@ -436,6 +460,11 @@
     bounces: number;
   };
 
+  const gpuCanvas =
+    document.getElementById(
+      "gpu-canvas",
+    ) as HTMLCanvasElement | null;
+
   const canvas =
     document.getElementById(
       "world-canvas",
@@ -445,7 +474,8 @@
     canvas?.getContext(
       "2d",
       {
-        alpha: false,
+        alpha: true,
+        desynchronized: true,
       },
     );
 
@@ -479,16 +509,43 @@
   let engine: Engine | null = null;
   let wasmModule: WasmModule | null = null;
 
+  let gpuContext: any = null;
+  let gpuDevice: any = null;
+  let gpuPipeline: any = null;
+  let gpuUniformBuffer: any = null;
+  let gpuBindGroup: any = null;
+  let gpuFormat = "bgra8unorm";
+  let gpuReady = false;
+  let gpuLastTime = 0;
+
+  const gpuUniformData = new Float32Array(8);
+
   let wasmReady = false;
   let initialized = false;
   let destroyed = false;
 
   let training = false;
+  let trainingPreview = false;
   let runMode = false;
   let evaluation = false;
 
   let trainingTimer: number | null =
     null;
+
+  let trainingWorker: Worker | null = null;
+  let trainingJobId = 0;
+  let lastInferenceTime = 0;
+  let lastTelemetryTime = 0;
+
+  /*
+   * Collision recovery in the foreground visualizer is deliberately
+   * independent of the training worker. After restoring the same map,
+   * force several movement frames so the preview can never look stuck.
+   */
+  let recoveryMoveFrames = 0;
+
+  const INFERENCE_INTERVAL_MS = 33;
+  const TELEMETRY_INTERVAL_MS = 450;
 
   let frameHandle = 0;
 
@@ -546,6 +603,7 @@
 
     seed: 0,
     step: 0,
+    trainingSteps: 0,
     episode: 0,
     episodeSteps: 0,
 
@@ -585,6 +643,8 @@
   let worldMaxZ = 20;
 
   let currentAction = 0;
+  let runStallFrames = 0;
+  let runLastDistance = Number.POSITIVE_INFINITY;
 
   let lastRenderTime = 0;
   let fps = 0;
@@ -734,6 +794,535 @@
       trainingTimer =
         null;
     }
+  }
+
+  function terminateTrainingWorker(): void {
+    trainingJobId += 1;
+
+    if (
+      trainingWorker
+    ) {
+      try {
+        trainingWorker.terminate();
+      } catch {
+        // Best effort during page teardown.
+      }
+    }
+
+    trainingWorker =
+      null;
+  }
+
+  function getTrainingConfig(): Record<string, unknown> {
+    return {
+      difficulty: controlsState.difficulty,
+      obstacles: controlsState.obstacles,
+      episodeSteps: controlsState.episodeSteps,
+      learningRate: controlsState.learningRate,
+      gamma: controlsState.gamma,
+      batchSize: controlsState.batchSize,
+      epsilon: controlsState.epsilon,
+      epsilonMin: controlsState.epsilonMin,
+      epsilonDecay: controlsState.epsilonDecay,
+      targetUpdate: controlsState.targetUpdate,
+    };
+  }
+
+  function applyWorkerTelemetry(
+    data: Record<string, unknown>,
+  ): void {
+    snapshot.mode =
+      String(
+        data.mode ??
+          snapshot.mode,
+      );
+
+    snapshot.state =
+      String(
+        data.state ??
+          snapshot.state,
+      );
+
+    snapshot.status =
+      String(
+        data.status ??
+          snapshot.status,
+      );
+
+    snapshot.seed =
+      finite(
+        data.seed,
+        snapshot.seed,
+      );
+
+    snapshot.step =
+      finite(
+        data.step,
+        snapshot.step,
+      );
+
+    snapshot.trainingSteps =
+      finite(
+        data.trainingSteps,
+        snapshot.trainingSteps,
+      );
+
+    snapshot.episode =
+      finite(
+        data.episode,
+        snapshot.episode,
+      );
+
+    snapshot.episodeSteps =
+      finite(
+        data.episodeSteps,
+        snapshot.episodeSteps,
+      );
+
+    snapshot.reward =
+      finite(
+        data.reward,
+        snapshot.reward,
+      );
+
+    snapshot.episodeReward =
+      finite(
+        data.episodeReward,
+        snapshot.episodeReward,
+      );
+
+    snapshot.loss =
+      finite(
+        data.loss,
+        snapshot.loss,
+      );
+
+    snapshot.epsilon =
+      finite(
+        data.epsilon,
+        snapshot.epsilon,
+      );
+
+    snapshot.replay =
+      finite(
+        data.replay,
+        snapshot.replay,
+      );
+
+  }
+
+  function handleTrainingWorkerMessage(
+    event: MessageEvent,
+  ): void {
+    const data =
+      (event.data ?? {}) as Record<string, unknown>;
+
+    const jobId =
+      finite(
+        data.jobId,
+        -1,
+      );
+
+    if (
+      jobId !==
+      trainingJobId
+    ) {
+      return;
+    }
+
+    const type =
+      upper(
+        data.type,
+      );
+
+    if (
+      type ===
+      "PROGRESS"
+    ) {
+      const previewModel =
+        typeof data.previewModel ===
+          "string"
+          ? data.previewModel
+          : "";
+
+      if (
+        previewModel &&
+        engine
+      ) {
+        try {
+          const imported =
+            engine.import_model(
+              previewModel,
+            );
+
+          if (imported) {
+            syncWorldBuffers();
+          }
+        } catch (error) {
+          handleRuntimeError(error);
+          return;
+        }
+      }
+
+      applyWorkerTelemetry(
+        {
+          ...data,
+          state: "RUNNING",
+        },
+      );
+
+      const completed =
+        finite(
+          data.completed,
+          0,
+        );
+
+      const requested =
+        finite(
+          data.requested,
+          0,
+        );
+
+      snapshot.status =
+        requested > 0
+          ? `TRAINING ${completed}/${requested}`
+          : `TRAINING ${completed}`;
+
+      setMessage(
+        runMode
+          ? (requested > 0
+              ? `RUN + TRAIN ${completed}/${requested} / CPU WORKER`
+              : `RUN + TRAIN ${completed} / CPU WORKER`)
+          : (requested > 0
+              ? `TRAINING ${completed}/${requested} / CPU WORKER`
+              : `CONTINUOUS TRAINING ${completed} / CPU WORKER`),
+      );
+
+      emit(
+        "raytracer:training-progress",
+        {
+          source: "worker",
+          ...data,
+        },
+      );
+
+      emitAIState();
+      renderRuntime();
+      return;
+    }
+
+    if (
+      type ===
+      "COMPLETE"
+    ) {
+      const model =
+        String(
+          data.model ?? "",
+        );
+
+      if (
+        model &&
+        engine
+      ) {
+        try {
+          const imported =
+            engine.import_model(
+              model,
+            );
+
+          if (!imported) {
+            throw new Error(
+              "trained model import rejected by runtime",
+            );
+          }
+        } catch (error) {
+          terminateTrainingWorker();
+          training = false;
+          evaluation = false;
+          handleRuntimeError(
+            error,
+          );
+          return;
+        }
+      }
+
+      applyWorkerTelemetry(
+        data,
+      );
+
+      training =
+        false;
+
+      trainingPreview =
+        false;
+
+      evaluation =
+        false;
+
+      setMode(
+        upper(
+          data.mode ??
+            "TRAIN",
+        ),
+      );
+
+      setState(
+        "COMPLETE",
+      );
+
+      snapshot.status =
+        String(
+          data.status ??
+            "TRAINING COMPLETE",
+        );
+
+      setMessage(
+        String(
+          data.message ??
+            "TRAINING COMPLETE / MODEL APPLIED",
+        ),
+      );
+
+      terminateTrainingWorker();
+      clearTrainingTimer();
+
+      if (
+        engine
+      ) {
+        syncWorldBuffers();
+      }
+
+      emit(
+        "raytracer:training-complete",
+        {
+          source: "worker",
+          ...data,
+        },
+      );
+
+      emitAIState();
+      renderRuntime();
+      drawWorld();
+      return;
+    }
+
+    if (
+      type ===
+      "EVAL_COMPLETE"
+    ) {
+      evaluation =
+        false;
+
+      setMode(
+        "EVAL",
+      );
+
+      setState(
+        "COMPLETE",
+      );
+
+      const average =
+        finite(
+          data.average,
+          0,
+        );
+
+      snapshot.status =
+        `EVAL AVG ${average.toFixed(6)}`;
+
+      setMessage(
+        `EVALUATION COMPLETE / AVG ${average.toFixed(6)}`,
+      );
+
+      emit(
+        "raytracer:ai-eval",
+        {
+          source: "worker",
+          ...data,
+        },
+      );
+
+      terminateTrainingWorker();
+      renderRuntime();
+      emitAIState();
+      return;
+    }
+
+    if (
+      type ===
+      "ERROR"
+    ) {
+      terminateTrainingWorker();
+      training =
+        false;
+      evaluation =
+        false;
+
+      handleRuntimeError(
+        new Error(
+          String(
+            data.message ??
+              "background worker failed",
+          ),
+        ),
+      );
+    }
+  }
+
+  function startTrainingWorker(
+    mode:
+      | "steps"
+      | "episodes"
+      | "continuous",
+    count = 0,
+  ): void {
+    if (
+      !engine
+    ) {
+      setMessage(
+        "RUNTIME NOT READY",
+      );
+      return;
+    }
+
+    terminateTrainingWorker();
+    clearTrainingTimer();
+
+    training =
+      true;
+
+    // Training and foreground RUN are independent.
+    // When RUN is already active, keep it active.
+    // When RUN is idle, training gets a live preview.
+    trainingPreview =
+      true;
+
+    recoveryMoveFrames =
+      0;
+
+    evaluation =
+      false;
+
+    const requested =
+      mode === "continuous"
+        ? 0
+        : clampInt(
+            count,
+            1,
+            mode === "steps"
+              ? 1000000
+              : 100000,
+          );
+
+    const model =
+      engine.export_model();
+
+    const seed =
+      finite(
+        engine.current_seed(),
+        Date.now() >>> 0,
+      );
+
+    const jobId =
+      ++trainingJobId;
+
+    const worker =
+      new Worker(
+        new URL(
+          "../workers/training.worker.ts",
+          import.meta.url,
+        ),
+        {
+          type: "module",
+        },
+      );
+
+    trainingWorker =
+      worker;
+
+    worker.addEventListener(
+      "message",
+      handleTrainingWorkerMessage,
+    );
+
+    worker.addEventListener(
+      "error",
+      (event) => {
+        if (
+          jobId !==
+          trainingJobId
+        ) {
+          return;
+        }
+
+        terminateTrainingWorker();
+
+        training =
+          false;
+
+        evaluation =
+          false;
+
+        handleRuntimeError(
+          event.error ??
+            new Error(
+              event.message ||
+                "training worker error",
+            ),
+        );
+      },
+    );
+
+    setMode(
+      mode === "episodes"
+        ? "TRAIN-EPISODES"
+        : "TRAIN",
+    );
+
+    setState(
+      "RUNNING",
+    );
+
+    snapshot.status =
+      mode === "continuous"
+        ? "CONTINUOUS TRAINING"
+        : `TRAINING ${requested}`;
+
+    setMessage(
+      mode === "continuous"
+        ? "AI TRAINING / CPU WORKER"
+        : `AI TRAINING ${requested} / CPU WORKER`,
+    );
+
+    emit(
+      "raytracer:training-start",
+      {
+        source: "worker",
+        mode,
+        requested,
+      },
+    );
+
+    worker.postMessage(
+      {
+        type: "START",
+        jobId,
+        mode,
+        requested,
+        chunk: clampInt(
+          controlsState.trainChunk || 1024,
+          128,
+          2048,
+        ),
+        seed,
+        model,
+        config:
+          getTrainingConfig(),
+      },
+    );
+
+    renderRuntime();
+    emitAIState();
   }
 
   function addRow(
@@ -911,10 +1500,19 @@
 
     addRow(
       120,
-      "STEP",
+      "ENV-STEP",
       pad(
         snapshot.step,
         8,
+      ),
+    );
+
+    addRow(
+      125,
+      "TRAIN-STEP",
+      pad(
+        snapshot.trainingSteps,
+        10,
       ),
     );
 
@@ -1133,6 +1731,34 @@
     );
   }
 
+  function trainingStepCount(): number {
+    if (
+      engine &&
+      typeof engine.training_step_count === "function"
+    ) {
+      return finite(
+        engine.training_step_count(),
+      );
+    }
+
+    if (engine) {
+      try {
+        const metrics =
+          safeBuffer(
+            engine.metrics(),
+          );
+
+        return finite(
+          metrics[1],
+        );
+      } catch {
+        // Older wasm builds may not expose metrics either.
+      }
+    }
+
+    return snapshot.trainingSteps;
+  }
+
   function safeBuffer(
     value: unknown,
   ): number[] {
@@ -1191,6 +1817,45 @@
     return [];
   }
 
+  function syncWorldBuffers(): void {
+    if (!engine) {
+      return;
+    }
+
+    try {
+      sensorBuffer =
+        safeBuffer(
+          engine.get_sensor_buffer(),
+        );
+
+      agentBuffer =
+        safeBuffer(
+          engine.get_agent_buffer(),
+        );
+
+      targetBuffer =
+        safeBuffer(
+          engine.get_target_buffer(),
+        );
+
+      obstacleBuffer =
+        safeBuffer(
+          engine.get_obstacle_buffer(),
+        );
+
+      pathBuffer =
+        safeBuffer(
+          engine.get_path_buffer(),
+        );
+
+      calculateWorldBounds();
+    } catch (error) {
+      handleRuntimeError(
+        error,
+      );
+    }
+  }
+
   function syncSnapshot(): void {
     if (!engine) {
       return;
@@ -1211,6 +1876,11 @@
       snapshot.step =
         finite(
           engine.current_step(),
+        );
+
+      snapshot.trainingSteps =
+        finite(
+          trainingStepCount(),
         );
 
       snapshot.episode =
@@ -1302,32 +1972,7 @@
           "READY";
       }
 
-      sensorBuffer =
-        safeBuffer(
-          engine.get_sensor_buffer(),
-        );
-
-      agentBuffer =
-        safeBuffer(
-          engine.get_agent_buffer(),
-        );
-
-      targetBuffer =
-        safeBuffer(
-          engine.get_target_buffer(),
-        );
-
-      obstacleBuffer =
-        safeBuffer(
-          engine.get_obstacle_buffer(),
-        );
-
-      pathBuffer =
-        safeBuffer(
-          engine.get_path_buffer(),
-        );
-
-      calculateWorldBounds();
+      syncWorldBuffers();
       emitAIState();
       renderRuntime();
     } catch (error) {
@@ -1358,6 +2003,9 @@
 
       step:
         snapshot.step,
+
+      trainingSteps:
+        snapshot.trainingSteps,
 
       episode:
         snapshot.episode,
@@ -1978,6 +2626,21 @@
         height;
     }
 
+    if (gpuCanvas) {
+      const gpuWidth =
+        Math.max(1, Math.round(rect.width * Math.min(dpr, 1.5)));
+      const gpuHeight =
+        Math.max(1, Math.round(rect.height * Math.min(dpr, 1.5)));
+
+      if (
+        gpuCanvas.width !== gpuWidth ||
+        gpuCanvas.height !== gpuHeight
+      ) {
+        gpuCanvas.width = gpuWidth;
+        gpuCanvas.height = gpuHeight;
+      }
+    }
+
     ctx!.setTransform(
       1,
       0,
@@ -1988,11 +2651,266 @@
     );
   }
 
-  function clearCanvas(): void {
-    ctx!.fillStyle =
-      "#000";
+  const GPU_SHADER = `
+struct Frame {
+  screenTime: vec4<f32>,
+  agentTarget: vec4<f32>,
+};
 
-    ctx!.fillRect(
+@group(0) @binding(0)
+var<uniform> frame: Frame;
+
+struct VSOut {
+  @builtin(position) position: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vsMain(@builtin(vertex_index) vertexIndex: u32) -> VSOut {
+  var positions = array<vec2<f32>, 3>(
+    vec2<f32>(-1.0, -3.0),
+    vec2<f32>( 3.0,  1.0),
+    vec2<f32>(-1.0,  1.0)
+  );
+
+  let p = positions[vertexIndex];
+
+  var out: VSOut;
+  out.position = vec4<f32>(p, 0.0, 1.0);
+  out.uv = p * 0.5 + vec2<f32>(0.5);
+  return out;
+}
+
+fn hash2(p: vec2<f32>) -> f32 {
+  let h = dot(p, vec2<f32>(127.1, 311.7));
+  return fract(sin(h) * 43758.5453);
+}
+
+@fragment
+fn fsMain(input: VSOut) -> @location(0) vec4<f32> {
+  let resolution = frame.screenTime.xy;
+  let time = frame.screenTime.z;
+  let seed = frame.screenTime.w;
+  let uv = input.uv;
+  let aspect = resolution.x / max(resolution.y, 1.0);
+
+  var p = (uv - vec2<f32>(0.5)) * vec2<f32>(aspect, 1.0);
+
+  var color = vec3<f32>(0.002, 0.006, 0.004);
+
+  let gridScale = 18.0;
+  let g = abs(fract(p * gridScale - 0.5) - 0.5) / fwidth(p * gridScale);
+  let line = 1.0 - min(min(g.x, g.y), 1.0);
+  color += vec3<f32>(0.0, 0.035, 0.012) * line * 0.26;
+
+  let sweep = 0.5 + 0.5 * sin(time * 1.7 + p.y * 35.0 + seed * 0.001);
+  color += vec3<f32>(0.0, 0.008, 0.002) * sweep;
+
+  let agent = vec2<f32>(
+    frame.agentTarget.x,
+    frame.agentTarget.y
+  );
+
+  let target = vec2<f32>(
+    frame.agentTarget.z,
+    frame.agentTarget.w
+  );
+
+  let da = max(length(p - agent * 0.035), 0.0001);
+  let dt = max(length(p - target * 0.035), 0.0001);
+
+  let ag = exp(-da * 38.0);
+  let tg = exp(-dt * 46.0);
+
+  color += vec3<f32>(0.0, 0.17, 0.045) * ag;
+  color += vec3<f32>(0.02, 0.12, 0.05) * tg;
+
+  // Small real GPU workload: animated field perturbation used by the background.
+  var field = 0.0;
+  var q = p * 2.7;
+  for (var i = 0u; i < 8u; i = i + 1u) {
+    field += sin(q.x * 3.0 + time * 0.8 + f32(i) * 0.7)
+      * cos(q.y * 4.0 - time * 0.6 - f32(i) * 0.35) * 0.012;
+    q = q * 1.37 + vec2<f32>(0.17, -0.11);
+  }
+
+  color += vec3<f32>(0.0, max(field, 0.0), 0.0);
+
+  let vignette = smoothstep(1.25, 0.15, dot(p, p));
+  color *= vignette;
+
+  return vec4<f32>(color, 1.0);
+}
+`;
+
+  async function initWebGPU(): Promise<void> {
+    gpuReady = false;
+
+    if (!gpuCanvas || !(navigator as any).gpu) {
+      emit("raytracer:gpu", {
+        available: false,
+        backend: "CANVAS2D",
+        status: "WEBGPU UNAVAILABLE",
+      });
+      return;
+    }
+
+    try {
+      const adapter = await (navigator as any).gpu.requestAdapter({
+        powerPreference: "high-performance",
+      });
+
+      if (!adapter) {
+        throw new Error("WEBGPU ADAPTER NOT FOUND");
+      }
+
+      gpuDevice = await adapter.requestDevice({
+        label: "RAYTRC.GPU.DEVICE",
+      });
+
+      gpuContext = gpuCanvas.getContext("webgpu");
+      if (!gpuContext) {
+        throw new Error("WEBGPU CANVAS CONTEXT NOT FOUND");
+      }
+
+      gpuFormat = (navigator as any).gpu.getPreferredCanvasFormat();
+
+      gpuContext.configure({
+        device: gpuDevice,
+        format: gpuFormat,
+        alphaMode: "opaque",
+      });
+
+      const module = gpuDevice.createShaderModule({
+        label: "RAYTRC.GPU.BACKGROUND",
+        code: GPU_SHADER,
+      });
+
+      gpuPipeline = gpuDevice.createRenderPipeline({
+        label: "RAYTRC.GPU.FRAME",
+        layout: "auto",
+        vertex: {
+          module,
+          entryPoint: "vsMain",
+        },
+        fragment: {
+          module,
+          entryPoint: "fsMain",
+          targets: [{ format: gpuFormat }],
+        },
+        primitive: {
+          topology: "triangle-list",
+        },
+      });
+
+      gpuUniformBuffer = gpuDevice.createBuffer({
+        label: "RAYTRC.GPU.UNIFORMS",
+        size: 32,
+        usage:
+          (GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST),
+      });
+
+      gpuBindGroup = gpuDevice.createBindGroup({
+        label: "RAYTRC.GPU.BINDGROUP",
+        layout: gpuPipeline.getBindGroupLayout(0),
+        entries: [
+          {
+            binding: 0,
+            resource: {
+              buffer: gpuUniformBuffer,
+            },
+          },
+        ],
+      });
+
+      gpuReady = true;
+      resizeCanvas();
+
+      emit("raytracer:gpu", {
+        available: true,
+        backend: "WEBGPU",
+        status: "GPU READY",
+        format: gpuFormat,
+      });
+    } catch (error) {
+      gpuReady = false;
+      gpuContext = null;
+      gpuDevice = null;
+      gpuPipeline = null;
+
+      emit("raytracer:gpu", {
+        available: false,
+        backend: "CANVAS2D",
+        status:
+          error instanceof Error
+            ? `WEBGPU FAILED: ${error.message}`
+            : "WEBGPU FAILED",
+      });
+    }
+  }
+
+  function renderWebGPU(timestamp: number): void {
+    if (
+      !gpuReady ||
+      !gpuDevice ||
+      !gpuContext ||
+      !gpuPipeline ||
+      !gpuUniformBuffer ||
+      !gpuBindGroup ||
+      !gpuCanvas
+    ) {
+      return;
+    }
+
+    const agent = parseAgent();
+    const target = parseTarget();
+
+    gpuUniformData[0] = gpuCanvas.width;
+    gpuUniformData[1] = gpuCanvas.height;
+    gpuUniformData[2] = timestamp * 0.001;
+    gpuUniformData[3] = finite(snapshot.seed);
+    gpuUniformData[4] = agent.x;
+    gpuUniformData[5] = agent.z;
+    gpuUniformData[6] = target.x;
+    gpuUniformData[7] = target.z;
+
+    gpuDevice.queue.writeBuffer(
+      gpuUniformBuffer,
+      0,
+      gpuUniformData,
+    );
+
+    const encoder = gpuDevice.createCommandEncoder({
+      label: "RAYTRC.GPU.FRAME",
+    });
+
+    const pass = encoder.beginRenderPass({
+      colorAttachments: [
+        {
+          view: gpuContext.getCurrentTexture().createView(),
+          clearValue: {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 1,
+          },
+          loadOp: "clear",
+          storeOp: "store",
+        },
+      ],
+    });
+
+    pass.setPipeline(gpuPipeline);
+    pass.setBindGroup(0, gpuBindGroup);
+    pass.draw(3, 1, 0, 0);
+    pass.end();
+
+    gpuDevice.queue.submit([encoder.finish()]);
+    gpuLastTime = timestamp;
+  }
+
+  function clearCanvas(): void {
+    ctx!.clearRect(
       0,
       0,
       canvas!.width,
@@ -2984,12 +3902,21 @@
     );
 
     context.fillText(
-      `STEP ${pad(
+      `ENV ${pad(
         snapshot.step,
-        8,
+        6,
       )}`,
       10,
       46,
+    );
+
+    context.fillText(
+      `TRN ${pad(
+        snapshot.trainingSteps,
+        8,
+      )}`,
+      10,
+      60,
     );
 
     context.fillText(
@@ -2997,7 +3924,7 @@
         4,
       )}`,
       10,
-      60,
+      74,
     );
 
     context.fillText(
@@ -3005,7 +3932,7 @@
         4,
       )}`,
       10,
-      74,
+      88,
     );
 
     const widthLabel =
@@ -3040,19 +3967,229 @@
   function runOneInferenceStep(): void {
     if (
       !engine ||
-      training ||
-      evaluation
+      evaluation ||
+      (!runMode && !trainingPreview)
     ) {
       return;
     }
 
+    const previewIsTraining =
+      trainingPreview &&
+      !runMode;
+
     try {
+      /*
+       * TERMINAL POLICY
+       *
+       * SUCCESS:
+       *   Visual HOLD. The user explicitly presses RUN for another map.
+       *
+       * COLLISION:
+       *   Terminal for DQN learning, but recoverable for the foreground
+       *   visualizer. RUN and TRAIN PREVIEW use the same recovery path.
+       */
+      if (engine.is_done()) {
+        const terminalCollision =
+          engine.is_collision();
+
+        const terminalSuccess =
+          engine.is_success();
+
+        if (
+          terminalCollision &&
+          (
+            runMode ||
+            previewIsTraining
+          )
+        ) {
+          engine.recover_from_collision();
+
+          recoveryMoveFrames = 3;
+          runStallFrames = 0;
+          runLastDistance =
+            Number.POSITIVE_INFINITY;
+          lastInferenceTime = 0;
+          currentAction = 0;
+
+          setMode(
+            previewIsTraining
+              ? "TRAIN-RECOVER"
+              : "RECOVER",
+          );
+
+          setState("RUNNING");
+
+          snapshot.status =
+            previewIsTraining
+              ? "TRAIN PREVIEW / COLLISION RECOVERED"
+              : "COLLISION RECOVERED / SAME MAP";
+
+          setMessage(
+            previewIsTraining
+              ? "TRAIN PREVIEW / COLLISION / SAME MAP / CONTINUE"
+              : "COLLISION / SAME MAP / CONTINUE",
+          );
+
+          syncWorldBuffers();
+          syncSnapshot();
+          return;
+        }
+
+        if (terminalSuccess) {
+          if (previewIsTraining) {
+            trainingPreview = false;
+          } else {
+            runMode = false;
+          }
+
+          recoveryMoveFrames = 0;
+          runStallFrames = 0;
+          runLastDistance =
+            Number.POSITIVE_INFINITY;
+
+          setMode("HOLD");
+          setState("SUCCESS");
+
+          snapshot.status =
+            "TARGET REACHED / MAP HOLD";
+
+          setMessage(
+            "TARGET REACHED / PRESS RUN FOR NEXT MAP",
+          );
+
+          syncSnapshot();
+          return;
+        }
+
+        /*
+         * Defensive fallback for an unexpected terminal state.
+         * Keep the same map when possible by reusing the current seed.
+         */
+        if (
+          runMode ||
+          previewIsTraining
+        ) {
+          engine.reset_environment(
+            finite(
+              engine.current_seed(),
+              Date.now() >>> 0,
+            ),
+          );
+
+          recoveryMoveFrames = 3;
+          runStallFrames = 0;
+          runLastDistance =
+            Number.POSITIVE_INFINITY;
+          lastInferenceTime = 0;
+          currentAction = 0;
+
+          setMode(
+            previewIsTraining
+              ? "TRAIN-RECOVER"
+              : "RECOVER",
+          );
+
+          setState("RUNNING");
+
+          snapshot.status =
+            previewIsTraining
+              ? "TRAIN PREVIEW / TERMINAL RECOVERED"
+              : "TERMINAL RECOVERED / SAME MAP";
+
+          setMessage(
+            previewIsTraining
+              ? "TRAIN PREVIEW / TERMINAL / RECOVER / CONTINUE"
+              : "TERMINAL / RECOVER / CONTINUE",
+          );
+
+          syncWorldBuffers();
+          syncSnapshot();
+          return;
+        }
+      }
+
+      const agentNow = parseAgent();
+      const targetNow = parseTarget();
+
+      const dxNow =
+        targetNow.x - agentNow.x;
+
+      const dzNow =
+        targetNow.z - agentNow.z;
+
+      const distanceNow =
+        Math.hypot(dxNow, dzNow);
+
+      /*
+       * After a collision we deliberately force FORWARD for a few frames.
+       * This is the critical part that prevents a recovered training preview
+       * from sitting at its start point waiting for another BRAKE decision.
+       */
+      let predictedAction =
+        recoveryMoveFrames > 0
+          ? 0
+          : clampInt(
+              engine.predict_action(),
+              0,
+              4,
+            );
+
+      /*
+       * BRAKE is valid for learning, but a foreground preview must not use
+       * BRAKE as a self-locking action when speed is already low.
+       */
+      if (
+        predictedAction === 3
+      ) {
+        predictedAction = 0;
+      }
+
+      const distanceImproved =
+        Number.isFinite(runLastDistance) &&
+        distanceNow <
+          runLastDistance -
+          0.002;
+
+      if (distanceImproved) {
+        runStallFrames = 0;
+      } else {
+        runStallFrames += 1;
+      }
+
+      /*
+       * Anti-stall applies to RUN and TRAIN PREVIEW.
+       */
+      if (
+        recoveryMoveFrames <= 0 &&
+        runStallFrames >= 12
+      ) {
+        const observation =
+          safeBuffer(
+            engine.get_observation(),
+          );
+
+        const targetSin =
+          finite(observation[33]);
+
+        if (
+          Math.abs(targetSin) > 0.12
+        ) {
+          predictedAction =
+            targetSin > 0
+              ? 2
+              : 1;
+        } else {
+          predictedAction = 0;
+        }
+
+        runStallFrames = 0;
+      }
+
+      runLastDistance =
+        distanceNow;
+
       currentAction =
-        clampInt(
-          engine.predict_action(),
-          0,
-          4,
-        );
+        predictedAction;
 
       const result =
         safeBuffer(
@@ -3061,78 +4198,174 @@
           ),
         );
 
+      if (
+        recoveryMoveFrames > 0
+      ) {
+        recoveryMoveFrames -= 1;
+      }
+
       const reward =
-        finite(
-          result[0],
-        );
+        finite(result[0]);
 
       const done =
-        finite(
-          result[1],
-        ) > 0.5;
+        finite(result[1]) > 0.5;
 
       const success =
-        finite(
-          result[2],
-        ) > 0.5;
+        finite(result[2]) > 0.5;
 
       const collision =
-        finite(
-          result[3],
-        ) > 0.5;
+        finite(result[3]) > 0.5;
 
       const distance =
+        finite(result[4]);
+
+      syncWorldBuffers();
+
+      if (!done) {
+        return;
+      }
+
+      const terminalEpisode =
         finite(
-          result[4],
+          engine.current_episode(),
         );
+
+      emit(
+        "raytracer:ai-episode",
+        {
+          episode:
+            terminalEpisode,
+
+          reward,
+          success,
+          collision,
+          distance,
+          action:
+            currentAction,
+
+          source:
+            previewIsTraining
+              ? "training-preview"
+              : "run",
+        },
+      );
 
       /*
-       * The Rust manual step intentionally leaves the
-       * environment terminal so the result can be returned.
-       *
-       * Autonomous RUN must explicitly start the next
-       * episode after terminal state.
+       * Collision is ALWAYS recoverable in the foreground visualizer.
+       * The worker still treats it as a terminal DQN experience.
        */
-      if (done) {
-        const terminalEpisode =
-          finite(
-            engine.current_episode(),
-          );
+      if (
+        collision &&
+        (
+          runMode ||
+          previewIsTraining
+        )
+      ) {
+        engine.recover_from_collision();
 
-        emit(
-          "raytracer:ai-episode",
-          {
-            episode:
-              terminalEpisode,
+        recoveryMoveFrames = 3;
+        runStallFrames = 0;
+        runLastDistance =
+          Number.POSITIVE_INFINITY;
+        lastInferenceTime = 0;
+        currentAction = 0;
 
-            reward,
-
-            success,
-
-            collision,
-
-            distance,
-
-            action:
-              currentAction,
-          },
+        setMode(
+          previewIsTraining
+            ? "TRAIN-RECOVER"
+            : "RECOVER",
         );
+
+        setState("RUNNING");
+
+        snapshot.status =
+          previewIsTraining
+            ? "TRAIN PREVIEW / COLLISION RECOVERED"
+            : "COLLISION RECOVERED / SAME MAP";
 
         setMessage(
-          success
-            ? "TARGET REACHED / NEW EPISODE"
-            : collision
-              ? "COLLISION / NEW EPISODE"
-              : "EPISODE COMPLETE / NEW EPISODE",
+          previewIsTraining
+            ? "TRAIN PREVIEW / COLLISION / SAME MAP / CONTINUE"
+            : "COLLISION / SAME MAP / CONTINUE",
         );
 
-        engine.reset_environment(
-          0,
+        syncWorldBuffers();
+        syncSnapshot();
+        return;
+      }
+
+      /*
+       * Success is the only normal terminal condition that stops the
+       * foreground visualizer.
+       */
+      if (success) {
+        if (previewIsTraining) {
+          trainingPreview = false;
+        } else {
+          runMode = false;
+        }
+
+        recoveryMoveFrames = 0;
+        runStallFrames = 0;
+        runLastDistance =
+          Number.POSITIVE_INFINITY;
+
+        setMode("HOLD");
+        setState("SUCCESS");
+
+        snapshot.status =
+          "TARGET REACHED / MAP HOLD";
+
+        setMessage(
+          "TARGET REACHED / PRESS RUN FOR NEXT MAP",
         );
 
         syncSnapshot();
-
         return;
+      }
+
+      /*
+       * Max-step/unknown terminal: recover rather than freezing the preview.
+       */
+      if (
+        runMode ||
+        previewIsTraining
+      ) {
+        engine.reset_environment(
+          finite(
+            engine.current_seed(),
+            Date.now() >>> 0,
+          ),
+        );
+
+        recoveryMoveFrames = 3;
+        runStallFrames = 0;
+        runLastDistance =
+          Number.POSITIVE_INFINITY;
+        lastInferenceTime = 0;
+        currentAction = 0;
+
+        setMode(
+          previewIsTraining
+            ? "TRAIN-RECOVER"
+            : "RECOVER",
+        );
+
+        setState("RUNNING");
+
+        snapshot.status =
+          previewIsTraining
+            ? "TRAIN PREVIEW / TERMINAL RECOVERED"
+            : "TERMINAL RECOVERED / SAME MAP";
+
+        setMessage(
+          previewIsTraining
+            ? "TRAIN PREVIEW / TERMINAL / RECOVER / CONTINUE"
+            : "TERMINAL / RECOVER / CONTINUE",
+        );
+
+        syncWorldBuffers();
+        syncSnapshot();
       }
     } catch (error) {
       handleRuntimeError(
@@ -3173,26 +4406,44 @@
     lastRenderTime =
       timestamp;
 
-    renderCount += 1;
+    renderCount +=
+      1;
 
     if (
       engine &&
       initialized &&
-      runMode &&
-      !training &&
-      !evaluation
+      (runMode || trainingPreview) &&
+      !evaluation &&
+      (
+        lastInferenceTime ===
+        0 ||
+        timestamp -
+          lastInferenceTime >=
+          INFERENCE_INTERVAL_MS
+      )
     ) {
+      lastInferenceTime =
+        timestamp;
+
       runOneInferenceStep();
     }
 
     if (
       engine &&
-      renderCount % 6 ===
-        0
+      initialized &&
+      !training &&
+      !evaluation &&
+      timestamp -
+        lastTelemetryTime >=
+        TELEMETRY_INTERVAL_MS
     ) {
+      lastTelemetryTime =
+        timestamp;
+
       syncSnapshot();
     }
 
+    renderWebGPU(timestamp);
     drawWorld();
 
     frameHandle =
@@ -3202,387 +4453,39 @@
   }
 
   function trainChunk(
-    count: number,
+    _count: number,
   ): void {
-    if (!engine) {
-      return;
-    }
-
-    try {
-      engine.train_steps(
-        clampInt(
-          count,
-          1,
-          5000,
-        ),
-      );
-
-      snapshot.mode =
-        "TRAIN";
-
-      snapshot.state =
-        "RUNNING";
-
-      syncSnapshot();
-    } catch (error) {
-      handleRuntimeError(
-        error,
-      );
-    }
+    // Kept only for API compatibility with older callers.
+    // Actual training runs in training.worker.ts.
   }
 
   function trainOneEpisode(): void {
-    if (!engine) {
-      return;
-    }
-
-    try {
-      engine.train_episode();
-
-      snapshot.mode =
-        "TRAIN-EPISODE";
-
-      snapshot.state =
-        "RUNNING";
-
-      syncSnapshot();
-
-      emit(
-        "raytracer:training-episode",
-        {
-          episode:
-            snapshot.episode,
-
-          reward:
-            snapshot.episodeReward,
-
-          steps:
-            snapshot.episodeSteps,
-        },
-      );
-    } catch (error) {
-      handleRuntimeError(
-        error,
-      );
-    }
+    // Kept only for API compatibility with older callers.
   }
 
   function startTrainingSteps(
     count: number,
   ): void {
-    if (!engine) {
-      setMessage(
-        "RUNTIME NOT READY",
-      );
-
-      return;
-    }
-
-    stopTraining(
-      false,
+    startTrainingWorker(
+      "steps",
+      count,
     );
-
-    training =
-      true;
-
-    runMode =
-      false;
-
-    evaluation =
-      false;
-
-    let remaining =
-      clampInt(
-        count,
-        1,
-        1000000,
-      );
-
-    setMode(
-      "TRAIN",
-    );
-
-    setState(
-      "RUNNING",
-    );
-
-    setMessage(
-      `TRAINING ${remaining} STEPS`,
-    );
-
-    emit(
-      "raytracer:training-start",
-      {
-        source:
-          "renderer",
-
-        steps:
-          remaining,
-      },
-    );
-
-    const tick =
-      () => {
-        if (
-          destroyed ||
-          !training
-        ) {
-          return;
-        }
-
-        if (
-          remaining <=
-          0
-        ) {
-          training =
-            false;
-
-          clearTrainingTimer();
-
-          setMode(
-            "TRAIN",
-          );
-
-          setState(
-            "COMPLETE",
-          );
-
-          snapshot.status =
-            "TRAINING COMPLETE";
-
-          setMessage(
-            "STEP TRAINING COMPLETE",
-          );
-
-          emit(
-            "raytracer:training-complete",
-            {
-              source:
-                "renderer",
-            },
-          );
-
-          syncSnapshot();
-
-          return;
-        }
-
-        const chunk =
-          Math.min(
-            controlsState.trainChunk,
-            remaining,
-            1000,
-          );
-
-        trainChunk(
-          chunk,
-        );
-
-        remaining -=
-          chunk;
-
-        setMessage(
-          `TRAINING REMAINING ${remaining}`,
-        );
-
-        trainingTimer =
-          window.setTimeout(
-            tick,
-            0,
-          );
-      };
-
-    tick();
   }
 
   function startContinuousTraining(): void {
-    if (!engine) {
-      setMessage(
-        "RUNTIME NOT READY",
-      );
-
-      return;
-    }
-
-    stopTraining(
-      false,
+    startTrainingWorker(
+      "continuous",
+      0,
     );
-
-    training =
-      true;
-
-    runMode =
-      false;
-
-    evaluation =
-      false;
-
-    setMode(
-      "TRAIN",
-    );
-
-    setState(
-      "RUNNING",
-    );
-
-    snapshot.status =
-      "CONTINUOUS TRAINING";
-
-    setMessage(
-      "AI TRAINING STARTED",
-    );
-
-    emit(
-      "raytracer:training-start",
-      {
-        source:
-          "renderer",
-      },
-    );
-
-    const tick =
-      () => {
-        if (
-          destroyed ||
-          !training
-        ) {
-          return;
-        }
-
-        trainChunk(
-          Math.min(
-            controlsState.trainChunk,
-            1000,
-          ),
-        );
-
-        trainingTimer =
-          window.setTimeout(
-            tick,
-            0,
-          );
-      };
-
-    tick();
   }
 
   function startEpisodeTraining(
     count: number,
   ): void {
-    if (!engine) {
-      setMessage(
-        "RUNTIME NOT READY",
-      );
-
-      return;
-    }
-
-    stopTraining(
-      false,
+    startTrainingWorker(
+      "episodes",
+      count,
     );
-
-    training =
-      true;
-
-    runMode =
-      false;
-
-    evaluation =
-      false;
-
-    let remaining =
-      clampInt(
-        count,
-        1,
-        100000,
-      );
-
-    setMode(
-      "TRAIN-EPISODES",
-    );
-
-    setState(
-      "RUNNING",
-    );
-
-    setMessage(
-      `TRAINING ${remaining} EPISODES`,
-    );
-
-    emit(
-      "raytracer:training-start",
-      {
-        source:
-          "renderer",
-
-        episodes:
-          remaining,
-      },
-    );
-
-    const tick =
-      () => {
-        if (
-          destroyed ||
-          !training
-        ) {
-          return;
-        }
-
-        if (
-          remaining <=
-          0
-        ) {
-          training =
-            false;
-
-          clearTrainingTimer();
-
-          setMode(
-            "TRAIN-EPISODES",
-          );
-
-          setState(
-            "COMPLETE",
-          );
-
-          snapshot.status =
-            "EPISODE TRAINING COMPLETE";
-
-          setMessage(
-            "EPISODE TRAINING COMPLETE",
-          );
-
-          emit(
-            "raytracer:training-complete",
-            {
-              source:
-                "renderer",
-            },
-          );
-
-          syncSnapshot();
-
-          return;
-        }
-
-        trainOneEpisode();
-
-        remaining -=
-          1;
-
-        setMessage(
-          `TRAINING EPISODES REMAINING ${remaining}`,
-        );
-
-        trainingTimer =
-          window.setTimeout(
-            tick,
-            0,
-          );
-      };
-
-    tick();
   }
 
   function stopTraining(
@@ -3591,13 +4494,24 @@
     const wasTraining =
       training;
 
+    const wasEvaluation =
+      evaluation;
+
     training =
       false;
 
+    trainingPreview =
+      false;
+
+    evaluation =
+      false;
+
     clearTrainingTimer();
+    terminateTrainingWorker();
 
     if (
       wasTraining ||
+      wasEvaluation ||
       emitEvent
     ) {
       emit(
@@ -3610,45 +4524,53 @@
     }
 
     if (
-      !destroyed
+      !destroyed &&
+      (
+        wasTraining ||
+        wasEvaluation
+      )
     ) {
-      if (
-        wasTraining
-      ) {
-        setMode(
-          "STOP",
-        );
+      setMode(
+        "STOP",
+      );
 
-        setState(
-          "STOPPED",
-        );
+      setState(
+        "STOPPED",
+      );
 
-        snapshot.status =
-          "TRAINING STOPPED";
+      snapshot.status =
+        wasEvaluation
+          ? "EVALUATION STOPPED"
+          : "TRAINING STOPPED";
 
-        setMessage(
-          "TRAINING STOPPED",
-        );
-      }
+      setMessage(
+        wasEvaluation
+          ? "EVALUATION STOPPED"
+          : "TRAINING STOPPED / PREVIEW PRESERVED",
+      );
 
       renderRuntime();
+      emitAIState();
     }
   }
 
   function runEvaluation(
     count: number,
   ): void {
-    if (!engine) {
+    if (
+      !engine
+    ) {
       setMessage(
         "RUNTIME NOT READY",
       );
-
       return;
     }
 
-    stopTraining(
-      false,
-    );
+    terminateTrainingWorker();
+    clearTrainingTimer();
+
+    training =
+      false;
 
     runMode =
       false;
@@ -3656,11 +4578,68 @@
     evaluation =
       true;
 
+    const requested =
+      clampInt(
+        count,
+        1,
+        10000,
+      );
+
     const baseSeed =
       (
         snapshot.seed ||
         1
       ) + 100000;
+
+    const model =
+      engine.export_model();
+
+    const jobId =
+      ++trainingJobId;
+
+    const worker =
+      new Worker(
+        new URL(
+          "../workers/training.worker.ts",
+          import.meta.url,
+        ),
+        {
+          type: "module",
+        },
+      );
+
+    trainingWorker =
+      worker;
+
+    worker.addEventListener(
+      "message",
+      handleTrainingWorkerMessage,
+    );
+
+    worker.addEventListener(
+      "error",
+      (event) => {
+        if (
+          jobId !==
+          trainingJobId
+        ) {
+          return;
+        }
+
+        terminateTrainingWorker();
+
+        evaluation =
+          false;
+
+        handleRuntimeError(
+          event.error ??
+            new Error(
+              event.message ||
+                "evaluation worker error",
+            ),
+        );
+      },
+    );
 
     setMode(
       "EVAL",
@@ -3671,81 +4650,32 @@
     );
 
     snapshot.status =
-      `EVALUATING ${count}`;
+      `EVALUATING ${requested}`;
 
     setMessage(
-      `EVALUATING ${count} EPISODES`,
+      `EVALUATING ${requested} / CPU WORKER`,
     );
 
-    try {
-      const result =
-        safeBuffer(
-          engine.evaluate_episodes(
-            clampInt(
-              count,
-              1,
-              10000,
-            ),
-            baseSeed,
-          ),
-        );
+    worker.postMessage(
+      {
+        type:
+          "EVALUATE",
 
-      const average =
-        result.length >
-        0
-          ? result.reduce(
-              (
-                total,
-                value,
-              ) =>
-                total +
-                finite(
-                  value,
-                ),
-              0,
-            ) /
-            result.length
-          : 0;
+        jobId,
 
-      snapshot.status =
-        `EVAL AVG ${average.toFixed(
-          6,
-        )}`;
+        requested,
 
-      setMessage(
-        `EVALUATION COMPLETE / AVG ${average.toFixed(
-          6,
-        )}`,
-      );
+        baseSeed,
 
-      emit(
-        "raytracer:ai-eval",
-        {
-          count,
-          baseSeed,
-          results:
-            result,
-          average,
-        },
-      );
-    } catch (error) {
-      handleRuntimeError(
-        error,
-      );
-    } finally {
-      evaluation =
-        false;
+        model,
 
-      setMode(
-        "EVAL",
-      );
+        config:
+          getTrainingConfig(),
+      },
+    );
 
-      setState(
-        "COMPLETE",
-      );
-
-      syncSnapshot();
-    }
+    renderRuntime();
+    emitAIState();
   }
 
   function resetAI(): void {
@@ -3758,6 +4688,9 @@
     );
 
     runMode =
+      false;
+
+    trainingPreview =
       false;
 
     evaluation =
@@ -3795,6 +4728,9 @@
     );
 
     runMode =
+      false;
+
+    trainingPreview =
       false;
 
     evaluation =
@@ -3846,6 +4782,9 @@
     );
 
     runMode =
+      false;
+
+    trainingPreview =
       false;
 
     evaluation =
@@ -4048,33 +4987,9 @@
       }
 
       case "RUN": {
-        stopTraining(
-          false,
-        );
-
-        evaluation =
-          false;
-
-        runMode =
-          true;
-
-        setMode(
-          "RUN",
-        );
-
-        setState(
-          "RUNNING",
-        );
-
-        snapshot.status =
-          "AUTONOMOUS RUN";
-
-        setMessage(
-          "AUTONOMOUS NAVIGATION ACTIVE",
-        );
-
-        syncSnapshot();
-
+        // RUN controls only the foreground autonomous preview.
+        // It must NEVER stop the background training worker.
+        handleRun();
         return;
       }
 
@@ -4535,27 +5450,39 @@
         controlsState,
       );
 
+      await initWebGPU();
+      resizeCanvas();
       syncSnapshot();
 
       emit(
         "raytracer:gpu",
         {
           available:
-            "gpu" in navigator,
+            gpuReady,
 
           adapter:
-            "RUST WASM / CANVAS",
+            gpuReady
+              ? "WEBGPU / HIGH-PERFORMANCE"
+              : "CANVAS2D FALLBACK",
 
           device:
-            "RUST WASM",
+            gpuReady
+              ? "WEBGPU DEVICE READY"
+              : "NO WEBGPU DEVICE",
 
           uniformBytes:
-            0,
+            gpuReady
+              ? 32
+              : 0,
 
           framebufferBytes:
-            canvas!.width *
-            canvas!.height *
-            4,
+            gpuReady && gpuCanvas
+              ? gpuCanvas.width *
+                gpuCanvas.height *
+                4
+              : canvas!.width *
+                canvas!.height *
+                4,
         },
       );
 
@@ -4668,16 +5595,49 @@
       setMessage(
         "RUNTIME NOT READY",
       );
-
       return;
     }
 
-    stopTraining(
-      false,
-    );
+    if (evaluation) {
+      terminateTrainingWorker();
+      clearTrainingTimer();
+      evaluation = false;
+    }
 
-    evaluation =
+    trainingPreview =
       false;
+
+    recoveryMoveFrames =
+      0;
+
+    /*
+     * A completed episode is intentionally held.
+     * RUN is the explicit user action that starts
+     * the next episode and therefore the next map.
+     */
+    if (
+      engine.is_done()
+    ) {
+      const nextSeed =
+        Date.now() >>> 0;
+
+      engine.reset_environment(
+        nextSeed,
+      );
+    }
+
+    currentAction =
+      0;
+
+    runStallFrames =
+      0;
+
+    runLastDistance = Number.POSITIVE_INFINITY;
+
+    lastInferenceTime =
+      0;
+
+    syncWorldBuffers();
 
     runMode =
       true;
@@ -4694,7 +5654,7 @@
       "AUTONOMOUS RUN";
 
     setMessage(
-      "AUTONOMOUS NAVIGATION ACTIVE",
+      "AUTONOMOUS NAVIGATION ACTIVE / 30 HZ",
     );
 
     syncSnapshot();
@@ -4704,6 +5664,9 @@
     stopTraining();
 
     runMode =
+      false;
+
+    trainingPreview =
       false;
 
     evaluation =
@@ -4878,7 +5841,11 @@
       training =
         false;
 
+      evaluation =
+        false;
+
       clearTrainingTimer();
+      terminateTrainingWorker();
 
       if (
         frameHandle
