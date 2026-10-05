@@ -16,7 +16,7 @@ import Benchmark from "../components/Benchmark.astro";
 
     <meta
       name="description"
-      content="RAYTRC.AI autonomous navigation and ray tracing laboratory"
+      content="RAYTRC.AI autonomous navigation and GPU ray tracing laboratory"
     />
 
     <meta
@@ -1490,12 +1490,14 @@ import Benchmark from "../components/Benchmark.astro";
 </style>
 
 <script>
+  // @ts-nocheck
+
   type ControlState = Record<
     string,
     unknown
   >;
 
-  let history: string[] = [];
+  let commandHistory: string[] = [];
   let historyIndex = -1;
 
   let runtimeReady = false;
@@ -1564,6 +1566,24 @@ import Benchmark from "../components/Benchmark.astro";
       length,
       "0",
     );
+  }
+
+  function finite(
+    value: unknown,
+    fallback = 0,
+  ): number {
+    const n = Number(value);
+
+    return Number.isFinite(n)
+      ? n
+      : fallback;
+  }
+
+  function integer(
+    value: unknown,
+    fallback = 0,
+  ): number {
+    return Math.floor(finite(value, fallback));
   }
 
   function dispatch(
@@ -1958,6 +1978,14 @@ import Benchmark from "../components/Benchmark.astro";
       "SAVE / LOAD / EXPORT / IMPORT",
     );
 
+    line(
+      235,
+      "10",
+      "CMD",
+      "CHECKPOINT",
+      "FULL V2 TRAINING STATE",
+    );
+
     comment(
       240,
       "------------------------------------------------------------",
@@ -2030,6 +2058,20 @@ import Benchmark from "../components/Benchmark.astro";
     );
   }
 
+  function dispatchAI(
+    action: string,
+    extra: Record<string, unknown> = {},
+  ): void {
+    dispatch(
+      "raytracer:ai",
+      {
+        action,
+        source: "index",
+        ...extra,
+      },
+    );
+  }
+
   function executeCommand(
     input: string,
   ): boolean {
@@ -2043,7 +2085,7 @@ import Benchmark from "../components/Benchmark.astro";
     const command =
       upper(raw);
 
-    history.unshift(
+    commandHistory.unshift(
       raw,
     );
 
@@ -2051,7 +2093,7 @@ import Benchmark from "../components/Benchmark.astro";
       history.length >
       100
     ) {
-      history.length =
+      commandHistory.length =
         100;
     }
 
@@ -2133,11 +2175,8 @@ import Benchmark from "../components/Benchmark.astro";
       command === "RUN"
     ) {
       dispatch(
-        "raytracer:ai",
+        "raytracer:run",
         {
-          action:
-            "RUN",
-
           source:
             "index",
         },
@@ -2158,16 +2197,7 @@ import Benchmark from "../components/Benchmark.astro";
     if (
       command === "TRAIN"
     ) {
-      dispatch(
-        "raytracer:ai",
-        {
-          action:
-            "START_TRAINING",
-
-          source:
-            "index",
-        },
-      );
+      dispatchAI("START_TRAINING");
 
       setStatus(
         "TRAIN REQUESTED",
@@ -2201,18 +2231,7 @@ import Benchmark from "../components/Benchmark.astro";
           ) || 250,
         );
 
-      dispatch(
-        "raytracer:ai",
-        {
-          action:
-            "TRAIN_STEPS",
-
-          count,
-
-          source:
-            "index",
-        },
-      );
+      dispatchAI("TRAIN_STEPS", { count });
 
       setStatus(
         `TRAIN ${count}`,
@@ -2229,16 +2248,7 @@ import Benchmark from "../components/Benchmark.astro";
     if (
       command === "STEP"
     ) {
-      dispatch(
-        "raytracer:ai",
-        {
-          action:
-            "STEP",
-
-          source:
-            "index",
-        },
-      );
+      dispatchAI("STEP");
 
       setStatus(
         "AI STEP",
@@ -2255,19 +2265,7 @@ import Benchmark from "../components/Benchmark.astro";
     if (
       command === "EVAL"
     ) {
-      dispatch(
-        "raytracer:ai",
-        {
-          action:
-            "EVALUATE",
-
-          count:
-            10,
-
-          source:
-            "index",
-        },
-      );
+      dispatchAI("EVALUATE", { count: 10 });
 
       setStatus(
         "EVAL REQUESTED",
@@ -2301,18 +2299,7 @@ import Benchmark from "../components/Benchmark.astro";
           ) || 10,
         );
 
-      dispatch(
-        "raytracer:ai",
-        {
-          action:
-            "EVALUATE",
-
-          count,
-
-          source:
-            "index",
-        },
-      );
+      dispatchAI("EVALUATE", { count });
 
       setStatus(
         `EVAL ${count}`,
@@ -2329,16 +2316,7 @@ import Benchmark from "../components/Benchmark.astro";
     if (
       command === "RESET"
     ) {
-      dispatch(
-        "raytracer:ai",
-        {
-          action:
-            "RESET_AI",
-
-          source:
-            "index",
-        },
-      );
+      dispatchAI("RESET_AI");
 
       setStatus(
         "AI RESET",
@@ -2356,19 +2334,9 @@ import Benchmark from "../components/Benchmark.astro";
       command === "ENV" ||
       command === "ENV RESET"
     ) {
-      dispatch(
-        "raytracer:ai",
-        {
-          action:
-            "RESET_ENVIRONMENT",
-
-          seed:
-            Date.now() >>> 0,
-
-          source:
-            "index",
-        },
-      );
+      dispatchAI("RESET_ENVIRONMENT", {
+        seed: Date.now() >>> 0,
+      });
 
       setStatus(
         "ENV RESET",
@@ -2399,23 +2367,12 @@ import Benchmark from "../components/Benchmark.astro";
           10,
         );
 
-      dispatch(
-        "raytracer:ai",
-        {
-          action:
-            "RESET_ENVIRONMENT",
-
-          seed:
-            Number.isFinite(
-              seed,
-            )
-              ? seed >>> 0
-              : Date.now() >>> 0,
-
-          source:
-            "index",
-        },
-      );
+      dispatchAI("RESET_ENVIRONMENT", {
+        seed:
+          Number.isFinite(seed)
+            ? seed >>> 0
+            : Date.now() >>> 0,
+      });
 
       setStatus(
         "ENV RESET",
@@ -2433,11 +2390,8 @@ import Benchmark from "../components/Benchmark.astro";
       command === "STOP"
     ) {
       dispatch(
-        "raytracer:ai",
+        "raytracer:stop",
         {
-          action:
-            "STOP",
-
           source:
             "index",
         },
@@ -2466,16 +2420,7 @@ import Benchmark from "../components/Benchmark.astro";
         },
       );
 
-      dispatch(
-        "raytracer:ai",
-        {
-          action:
-            "STATUS",
-
-          source:
-            "index",
-        },
-      );
+      dispatchAI("STATUS");
 
       setStatus(
         "STATUS REQUESTED",
@@ -2515,16 +2460,7 @@ import Benchmark from "../components/Benchmark.astro";
     if (
       command === "MODEL SAVE"
     ) {
-      dispatch(
-        "raytracer:ai",
-        {
-          action:
-            "SAVE_MODEL",
-
-          source:
-            "index",
-        },
-      );
+      dispatchAI("SAVE_MODEL");
 
       setStatus(
         "MODEL SAVE",
@@ -2541,16 +2477,7 @@ import Benchmark from "../components/Benchmark.astro";
     if (
       command === "MODEL LOAD"
     ) {
-      dispatch(
-        "raytracer:ai",
-        {
-          action:
-            "LOAD_MODEL",
-
-          source:
-            "index",
-        },
-      );
+      dispatchAI("LOAD_MODEL");
 
       setStatus(
         "MODEL LOAD",
@@ -2567,16 +2494,7 @@ import Benchmark from "../components/Benchmark.astro";
     if (
       command === "MODEL EXPORT"
     ) {
-      dispatch(
-        "raytracer:ai",
-        {
-          action:
-            "EXPORT_MODEL",
-
-          source:
-            "index",
-        },
-      );
+      dispatchAI("EXPORT_MODEL");
 
       setStatus(
         "MODEL EXPORT",
@@ -2593,16 +2511,7 @@ import Benchmark from "../components/Benchmark.astro";
     if (
       command === "MODEL IMPORT"
     ) {
-      dispatch(
-        "raytracer:ai",
-        {
-          action:
-            "IMPORT_MODEL",
-
-          source:
-            "index",
-        },
-      );
+      dispatchAI("IMPORT_MODEL");
 
       setStatus(
         "MODEL IMPORT",
@@ -2613,6 +2522,42 @@ import Benchmark from "../components/Benchmark.astro";
         "info",
       );
 
+      return true;
+    }
+
+    if (
+      command === "SAVE CHECKPOINT"
+    ) {
+      dispatchAI("SAVE_CHECKPOINT");
+      setStatus("CHECKPOINT SAVE");
+      message("FULL V2 CHECKPOINT SAVE REQUESTED", "ok");
+      return true;
+    }
+
+    if (
+      command === "LOAD CHECKPOINT"
+    ) {
+      dispatchAI("LOAD_CHECKPOINT");
+      setStatus("CHECKPOINT LOAD");
+      message("FULL V2 CHECKPOINT LOAD REQUESTED", "info");
+      return true;
+    }
+
+    if (
+      command === "EXPORT CHECKPOINT"
+    ) {
+      dispatchAI("EXPORT_CHECKPOINT");
+      setStatus("CHECKPOINT EXPORT");
+      message("FULL V2 CHECKPOINT EXPORT REQUESTED", "info");
+      return true;
+    }
+
+    if (
+      command === "IMPORT CHECKPOINT"
+    ) {
+      dispatchAI("IMPORT_CHECKPOINT");
+      setStatus("CHECKPOINT IMPORT");
+      message("FULL V2 CHECKPOINT IMPORT REQUESTED", "info");
       return true;
     }
 
@@ -2766,6 +2711,14 @@ import Benchmark from "../components/Benchmark.astro";
     );
 
     line(
+      85,
+      "10",
+      "CMD",
+      "EPISODES N",
+      "TRAIN N EPISODES",
+    );
+
+    line(
       90,
       "10",
       "CMD",
@@ -2848,6 +2801,43 @@ import Benchmark from "../components/Benchmark.astro";
       "CMD",
       "MODEL IMPORT",
       "IMPORT MODEL FROM FILE",
+    );
+
+    comment(
+      195,
+      "CHECKPOINT V2",
+    );
+
+    line(
+      197,
+      "10",
+      "CMD",
+      "SAVE CHECKPOINT",
+      "SAVE FULL TRAINING STATE",
+    );
+
+    line(
+      198,
+      "10",
+      "CMD",
+      "LOAD CHECKPOINT",
+      "RESTORE FULL TRAINING STATE",
+    );
+
+    line(
+      199,
+      "10",
+      "CMD",
+      "EXPORT CHECKPOINT",
+      "EXPORT V2 CHECKPOINT FILE",
+    );
+
+    line(
+      199,
+      "10",
+      "CMD",
+      "IMPORT CHECKPOINT",
+      "IMPORT V2 CHECKPOINT FILE",
     );
 
     comment(
@@ -3033,11 +3023,11 @@ import Benchmark from "../components/Benchmark.astro";
         historyIndex =
           Math.min(
             historyIndex + 1,
-            history.length - 1,
+            commandHistory.length - 1,
           );
 
         mainCommand.value =
-          history[
+          commandHistory[
             historyIndex
           ] ?? "";
 
@@ -3070,7 +3060,7 @@ import Benchmark from "../components/Benchmark.astro";
         mainCommand.value =
           historyIndex >=
           0
-            ? history[
+            ? commandHistory[
                 historyIndex
               ] ?? ""
             : "";
@@ -3370,6 +3360,23 @@ import Benchmark from "../components/Benchmark.astro";
   );
 
   window.addEventListener(
+    "raytracer:training-progress",
+    (event) => {
+      const detail =
+        (event as CustomEvent<Record<string, unknown>>).detail ?? {};
+
+      const completed = integer(detail.completed, 0);
+      const requested = integer(detail.requested, 0);
+
+      setStatus(
+        requested > 0
+          ? `TRAIN ${completed}/${requested}`
+          : `TRAIN ${completed}`,
+      );
+    },
+  );
+
+  window.addEventListener(
     "raytracer:training-complete",
     () => {
       setStatus(
@@ -3394,6 +3401,29 @@ import Benchmark from "../components/Benchmark.astro";
         "AI TRAINING STOPPED",
         "warn",
       );
+    },
+  );
+
+  window.addEventListener(
+    "raytracer:ai-episode",
+    (event) => {
+      const detail =
+        (event as CustomEvent<Record<string, unknown>>).detail ?? {};
+
+      const success = finite(detail.success, 0) > 0.5;
+      const collision = finite(detail.collision, 0) > 0.5;
+
+      if (success) {
+        message(
+          "EPISODE TARGET REACHED / NEW MAP CONTINUES",
+          "ok",
+        );
+      } else if (collision) {
+        message(
+          "EPISODE COLLISION / SAME MAP RECOVERY",
+          "warn",
+        );
+      }
     },
   );
 
@@ -3497,6 +3527,14 @@ import Benchmark from "../components/Benchmark.astro";
           "ok",
         );
       }
+    },
+  );
+
+
+  window.addEventListener(
+    "raytracer:controls-applied",
+    () => {
+      setStatus("APPLIED");
     },
   );
 

@@ -499,13 +499,13 @@ const { autoOpen = false } = Astro.props;
     obstacles: 12,
     episodeSteps: 1000,
 
-    learningRate: 0.001,
+    learningRate: 0.0005,
     gamma: 0.99,
     batchSize: 64,
     epsilon: 1.0,
     epsilonMin: 0.05,
-    epsilonDecay: 0.995,
-    targetUpdate: 1000,
+    epsilonDecay: 0.9985,
+    targetUpdate: 250,
 
     trainChunk: 250,
   };
@@ -755,6 +755,7 @@ const { autoOpen = false } = Astro.props;
     line(510, "10", "AI", "HARD-RESET", "AI HARD RESET");
     line(520, "10", "AI", "STATUS", "AI STATUS");
     line(530, "10", "AI", "MODEL", "SAVE MODEL / LOAD MODEL");
+    line(535, "10", "AI", "CHECKPOINT", "SAVE|LOAD|EXPORT|IMPORT CHECKPOINT");
 
     comment(540, "------------------------------------------------------------");
 
@@ -924,8 +925,6 @@ const { autoOpen = false } = Astro.props;
         state: cloneState(state),
       });
 
-      emitAI("RUN");
-
       refreshSource();
       writeMessage("RENDER + AI RUN REQUESTED", "ok");
       return true;
@@ -952,8 +951,6 @@ const { autoOpen = false } = Astro.props;
       dispatch("raytracer:stop", {
         source: "controls",
       });
-
-      emitAI("STOP");
 
       refreshSource();
       writeMessage("STOP REQUEST SENT", "warn");
@@ -1019,6 +1016,58 @@ const { autoOpen = false } = Astro.props;
       setStatus("IMPORT MODEL REQUESTED");
       refreshSource();
       writeMessage("MODEL IMPORT REQUESTED", "info");
+      return true;
+    }
+
+    if (
+      primary === "SAVE" &&
+      (secondary === "CHECKPOINT" || secondary === "STATE")
+    ) {
+      emitAI("SAVE_MODEL", {
+        format: "RAYTRC_NAV_CHECKPOINT_V2",
+      });
+      setStatus("CHECKPOINT SAVE REQUESTED");
+      refreshSource();
+      writeMessage("FULL V2 CHECKPOINT SAVE REQUESTED", "ok");
+      return true;
+    }
+
+    if (
+      primary === "LOAD" &&
+      (secondary === "CHECKPOINT" || secondary === "STATE")
+    ) {
+      emitAI("LOAD_MODEL", {
+        format: "RAYTRC_NAV_CHECKPOINT_V2",
+      });
+      setStatus("CHECKPOINT LOAD REQUESTED");
+      refreshSource();
+      writeMessage("FULL V2 CHECKPOINT LOAD REQUESTED", "info");
+      return true;
+    }
+
+    if (
+      primary === "EXPORT" &&
+      (secondary === "CHECKPOINT" || secondary === "STATE")
+    ) {
+      emitAI("EXPORT_MODEL", {
+        format: "RAYTRC_NAV_CHECKPOINT_V2",
+      });
+      setStatus("CHECKPOINT EXPORT REQUESTED");
+      refreshSource();
+      writeMessage("FULL V2 CHECKPOINT EXPORT REQUESTED", "info");
+      return true;
+    }
+
+    if (
+      primary === "IMPORT" &&
+      (secondary === "CHECKPOINT" || secondary === "STATE")
+    ) {
+      emitAI("IMPORT_MODEL", {
+        format: "RAYTRC_NAV_CHECKPOINT_V2",
+      });
+      setStatus("CHECKPOINT IMPORT REQUESTED");
+      refreshSource();
+      writeMessage("FULL V2 CHECKPOINT IMPORT REQUESTED", "info");
       return true;
     }
 
@@ -1171,6 +1220,48 @@ const { autoOpen = false } = Astro.props;
       return true;
     }
 
+    if (action === "CHECKPOINT" || action === "STATE") {
+      const checkpointAction = upper(args[1]);
+
+      if (checkpointAction === "SAVE") {
+        emitAI("SAVE_MODEL", { format: "RAYTRC_NAV_CHECKPOINT_V2" });
+        setStatus("CHECKPOINT SAVE REQUESTED");
+        refreshSource();
+        writeMessage("FULL V2 CHECKPOINT SAVE REQUESTED", "ok");
+        return true;
+      }
+
+      if (checkpointAction === "LOAD") {
+        emitAI("LOAD_MODEL", { format: "RAYTRC_NAV_CHECKPOINT_V2" });
+        setStatus("CHECKPOINT LOAD REQUESTED");
+        refreshSource();
+        writeMessage("FULL V2 CHECKPOINT LOAD REQUESTED", "info");
+        return true;
+      }
+
+      if (checkpointAction === "EXPORT") {
+        emitAI("EXPORT_MODEL", { format: "RAYTRC_NAV_CHECKPOINT_V2" });
+        setStatus("CHECKPOINT EXPORT REQUESTED");
+        refreshSource();
+        writeMessage("FULL V2 CHECKPOINT EXPORT REQUESTED", "info");
+        return true;
+      }
+
+      if (checkpointAction === "IMPORT") {
+        emitAI("IMPORT_MODEL", { format: "RAYTRC_NAV_CHECKPOINT_V2" });
+        setStatus("CHECKPOINT IMPORT REQUESTED");
+        refreshSource();
+        writeMessage("FULL V2 CHECKPOINT IMPORT REQUESTED", "info");
+        return true;
+      }
+
+      writeMessage(
+        "AI CHECKPOINT REQUIRES SAVE|LOAD|EXPORT|IMPORT",
+        "error",
+      );
+      return false;
+    }
+
     if (action === "MODEL") {
       const modelAction = upper(args[1]);
 
@@ -1319,6 +1410,18 @@ const { autoOpen = false } = Astro.props;
         changed.push("ior");
         break;
 
+      case "MATERIAL-ID":
+      case "MATERIAL_ID":
+      case "MATERIAL":
+        state.materialId = integerValue(
+          args[1],
+          0,
+          16,
+          state.materialId,
+        );
+        changed.push("materialId");
+        break;
+
       case "SCENE":
         state.scene = sanitizeValue(args.slice(1).join("_")) || state.scene;
         changed.push("scene");
@@ -1354,8 +1457,8 @@ const { autoOpen = false } = Astro.props;
       case "OBSTACLE":
         state.obstacles = integerValue(
           args[1],
-          0,
-          256,
+          1,
+          64,
           state.obstacles,
         );
         changed.push("obstacles");
@@ -1367,8 +1470,8 @@ const { autoOpen = false } = Astro.props;
       case "MAX_STEPS":
         state.episodeSteps = integerValue(
           args[1],
-          1,
-          100_000,
+          50,
+          5000,
           state.episodeSteps,
         );
         changed.push("episodeSteps");
@@ -1379,15 +1482,15 @@ const { autoOpen = false } = Astro.props;
       case "LEARNING_RATE":
         state.learningRate = floatValue(
           args[1],
-          0.0000001,
-          1,
+          0.00001,
+          0.1,
           state.learningRate,
         );
         changed.push("learningRate");
         break;
 
       case "GAMMA":
-        state.gamma = floatValue(args[1], 0, 0.99999, state.gamma);
+        state.gamma = floatValue(args[1], 0.80, 0.9999, state.gamma);
         changed.push("gamma");
         break;
 
@@ -1397,7 +1500,7 @@ const { autoOpen = false } = Astro.props;
         state.batchSize = integerValue(
           args[1],
           1,
-          2048,
+          256,
           state.batchSize,
         );
         changed.push("batchSize");
@@ -1423,8 +1526,8 @@ const { autoOpen = false } = Astro.props;
       case "EPSILON_DECAY":
         state.epsilonDecay = floatValue(
           args[1],
-          0.000001,
-          1,
+          0.9,
+          0.999999,
           state.epsilonDecay,
         );
         changed.push("epsilonDecay");
@@ -1435,7 +1538,7 @@ const { autoOpen = false } = Astro.props;
         state.targetUpdate = integerValue(
           args[1],
           1,
-          1_000_000,
+          100_000,
           state.targetUpdate,
         );
         changed.push("targetUpdate");
@@ -1446,8 +1549,8 @@ const { autoOpen = false } = Astro.props;
       case "TRAIN_CHUNK":
         state.trainChunk = integerValue(
           args[1],
-          1,
-          100_000,
+          128,
+          2048,
           state.trainChunk,
         );
         changed.push("trainChunk");
@@ -1543,13 +1646,13 @@ const { autoOpen = false } = Astro.props;
       state.obstacles = 12;
       state.episodeSteps = 1000;
 
-      state.learningRate = 0.001;
+      state.learningRate = 0.0005;
       state.gamma = 0.99;
       state.batchSize = 64;
       state.epsilon = 1.0;
       state.epsilonMin = 0.05;
-      state.epsilonDecay = 0.995;
-      state.targetUpdate = 1000;
+      state.epsilonDecay = 0.9985;
+      state.targetUpdate = 250;
       state.trainChunk = 250;
     }
 
@@ -1644,6 +1747,7 @@ const { autoOpen = false } = Astro.props;
     line(230, "10", "SET", "ROUGHNESS", "SET ROUGHNESS N");
     line(240, "10", "SET", "METALLIC", "SET METALLIC N");
     line(250, "10", "SET", "IOR", "SET IOR N");
+    line(255, "10", "SET", "MATERIAL-ID", "SET MATERIAL-ID 0..16");
     line(260, "10", "SET", "SCENE", "SET SCENE NAME");
     line(270, "10", "SET", "OBJECTS", "SET OBJECTS N");
     line(280, "10", "SET", "BVH", "SET BVH AUTO|ON|OFF");
@@ -1710,6 +1814,7 @@ const { autoOpen = false } = Astro.props;
     line(130, "10", "AI", "MODEL LOAD", "LOAD STORED MODEL");
     line(140, "10", "AI", "MODEL EXPORT", "EXPORT MODEL DATA");
     line(150, "10", "AI", "MODEL IMPORT", "IMPORT MODEL DATA");
+    line(155, "10", "AI", "CHECKPOINT", "FULL V2 TRAINING STATE");
 
     comment(160, "TRAINING EXAMPLES:");
     line(170, "10", "CMD", "TRAIN", "AI TRAIN 1000");

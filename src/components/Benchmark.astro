@@ -471,6 +471,9 @@ const { autoOpen = false } = Astro.props;
     learningRate: number;
     gamma: number;
     replaySize: number;
+    trainingSteps: number;
+    trainCompleted: number;
+    trainRequested: number;
 
     success: number;
     collision: number;
@@ -537,9 +540,12 @@ const { autoOpen = false } = Astro.props;
     episodeReward: 0,
     loss: 0,
     epsilon: 1,
-    learningRate: 0.001,
+    learningRate: 0.0005,
     gamma: 0.99,
     replaySize: 0,
+    trainingSteps: 0,
+    trainCompleted: 0,
+    trainRequested: 0,
 
     success: 0,
     collision: 0,
@@ -562,7 +568,7 @@ const { autoOpen = false } = Astro.props;
     ...initialState,
   };
 
-  const history: HistoryPoint[] = [];
+  const episodeHistory: HistoryPoint[] = [];
 
   const MAX_HISTORY = 64;
 
@@ -572,7 +578,7 @@ const { autoOpen = false } = Astro.props;
   let lastHistoryEpisode = -1;
 
   const section = document.getElementById("benchmark");
-  const screen = document.getElementById("bench-screen");
+  const benchScreen = document.getElementById("bench-screen");
   const commandInput = document.getElementById(
     "bench-command-input",
   ) as HTMLInputElement | null;
@@ -588,7 +594,7 @@ const { autoOpen = false } = Astro.props;
 
   if (
     !section ||
-    !screen ||
+    !benchScreen ||
     !commandInput ||
     !commandButton ||
     !modeElement ||
@@ -729,14 +735,14 @@ const { autoOpen = false } = Astro.props;
       clone(initialState),
     );
 
-    history.length = 0;
+    episodeHistory.length = 0;
     lastHistoryEpisode = -1;
 
     renderTelemetry();
   }
 
   function clearScreen(): void {
-    screen!.innerHTML = "";
+    benchScreen!.innerHTML = "";
   }
 
   function addComment(
@@ -745,7 +751,7 @@ const { autoOpen = false } = Astro.props;
     const row = document.createElement("div");
     row.className = "bench-comment";
     row.textContent = text;
-    screen!.appendChild(row);
+    benchScreen!.appendChild(row);
   }
 
   function addSection(
@@ -754,7 +760,7 @@ const { autoOpen = false } = Astro.props;
     const row = document.createElement("div");
     row.className = "bench-comment bench-section";
     row.textContent = text;
-    screen!.appendChild(row);
+    benchScreen!.appendChild(row);
   }
 
   function addRow(
@@ -786,7 +792,7 @@ const { autoOpen = false } = Astro.props;
       <span class="bench-value ${toneClass}">${value}</span>
     `;
 
-    screen!.appendChild(row);
+    benchScreen!.appendChild(row);
   }
 
   function addHistoryCell(
@@ -813,7 +819,7 @@ const { autoOpen = false } = Astro.props;
 
     lastHistoryEpisode = episode;
 
-    history.push({
+    episodeHistory.push({
       episode,
       step: integer(telemetry.step),
       reward: finite(telemetry.reward),
@@ -825,8 +831,8 @@ const { autoOpen = false } = Astro.props;
       fps: finite(telemetry.fps),
     });
 
-    if (history.length > MAX_HISTORY) {
-      history.shift();
+    if (episodeHistory.length > MAX_HISTORY) {
+      episodeHistory.shift();
     }
   }
 
@@ -835,7 +841,7 @@ const { autoOpen = false } = Astro.props;
   ): number {
     let line = startLine;
 
-    addComment(line++, "------------------------------------------------------------");
+    addComment("------------------------------------------------------------");
 
     const header = document.createElement("div");
     header.className = "history-row";
@@ -851,10 +857,10 @@ const { autoOpen = false } = Astro.props;
     addHistoryCell(header, "COLLISION", "header");
     addHistoryCell(header, "FPS", "header");
 
-    screen!.appendChild(header);
+    benchScreen!.appendChild(header);
 
-    for (let index = history.length - 1; index >= 0; index -= 1) {
-      const item = history[index];
+    for (let index = episodeHistory.length - 1; index >= 0; index -= 1) {
+      const item = episodeHistory[index];
 
       const row = document.createElement("div");
       row.className = "history-row";
@@ -870,7 +876,7 @@ const { autoOpen = false } = Astro.props;
       addHistoryCell(row, percent(item.collision));
       addHistoryCell(row, fixed(item.fps, 1));
 
-      screen!.appendChild(row);
+      benchScreen!.appendChild(row);
 
       line += 1;
     }
@@ -994,6 +1000,18 @@ const { autoOpen = false } = Astro.props;
       "REPLAY",
       compactNumber(telemetry.replaySize),
     );
+    addRow(
+      345,
+      "TRAIN-STEPS",
+      compactNumber(telemetry.trainingSteps),
+    );
+    addRow(
+      347,
+      "TRAIN-PROGRESS",
+      telemetry.trainRequested > 0
+        ? `${integer(telemetry.trainCompleted)}/${integer(telemetry.trainRequested)}`
+        : "CONTINUOUS",
+    );
 
     addSection("06 EPISODE RESULT");
     addRow(
@@ -1018,12 +1036,12 @@ const { autoOpen = false } = Astro.props;
     addSection("07 THROUGHPUT");
     addRow(
       380,
-      "RAYS / FRAME",
+      "PRIMARY-RAYS / FRAME",
       compactNumber(telemetry.raysPerFrame),
     );
     addRow(
       390,
-      "RAYS / SEC",
+      "PRIMARY-RAYS / SEC",
       compactNumber(telemetry.raysPerSecond),
     );
     addRow(
@@ -1071,7 +1089,27 @@ const { autoOpen = false } = Astro.props;
       <span class="white">HELP / STATUS / RUN / RESET / CLEAR / EXIT</span>
     `;
 
-    screen!.scrollTop = screen!.scrollHeight;
+    benchScreen!.scrollTop = benchScreen!.scrollHeight;
+  }
+
+  function deriveThroughput(): void {
+    const pixels =
+      Math.max(
+        0,
+        integer(telemetry.width) *
+          integer(telemetry.height),
+      );
+
+    telemetry.raysPerFrame = pixels;
+
+    telemetry.raysPerSecond =
+      pixels *
+      Math.max(0, telemetry.fps);
+
+    telemetry.samplesPerSecond =
+      pixels *
+      Math.max(0, integer(telemetry.samples)) *
+      Math.max(0, telemetry.fps);
   }
 
   function mergeTelemetry(
@@ -1133,6 +1171,9 @@ const { autoOpen = false } = Astro.props;
       "learningRate",
       "gamma",
       "replaySize",
+      "trainingSteps",
+      "trainCompleted",
+      "trainRequested",
       "success",
       "collision",
       "done",
@@ -1170,6 +1211,7 @@ const { autoOpen = false } = Astro.props;
       }
     }
 
+    deriveThroughput();
     addHistory();
     renderTelemetry();
   }
@@ -1213,12 +1255,21 @@ const { autoOpen = false } = Astro.props;
         detail?.gpuError ??
         telemetry.gpuError,
 
+      width:
+        detail?.renderWidth ??
+        telemetry.width,
+
+      height:
+        detail?.renderHeight ??
+        telemetry.height,
+
       uniformBytes:
         detail?.uniformBytes ??
         telemetry.uniformBytes,
 
       framebufferBytes:
         detail?.framebufferBytes ??
+        detail?.accumulationBytes ??
         telemetry.framebufferBytes,
     });
   }
@@ -1249,6 +1300,11 @@ const { autoOpen = false } = Astro.props;
     setMode("RUN");
     setState("RUNNING");
 
+    /*
+     * RUN has exactly one control path.
+     * Renderer listens to raytracer:run directly; do not also emit
+     * raytracer:ai RUN or one click becomes a double RUN request.
+     */
     dispatch("raytracer:bench-run", {
       source: "benchmark",
     });
@@ -1257,28 +1313,40 @@ const { autoOpen = false } = Astro.props;
       source: "benchmark",
     });
 
-    dispatch("raytracer:ai", {
-      action: "RUN",
-      source: "benchmark",
-    });
-
     renderTelemetry();
   }
 
-  function requestStart(): void {
+  function requestStart(count = 0, mode: "steps" | "episodes" | "continuous" = "continuous"): void {
     benchmarkRunning = true;
 
-    setMode("TRAIN");
+    setMode(
+      mode === "episodes"
+        ? "TRAIN-EPISODES"
+        : "TRAIN",
+    );
     setState("RUNNING");
+
+    const detail: AnyRecord = {
+      source: "benchmark",
+      count,
+    };
+
+    if (mode === "steps") {
+      detail.action = "TRAIN_STEPS";
+    } else if (mode === "episodes") {
+      detail.action = "TRAIN_EPISODES";
+    } else {
+      detail.action = "START_TRAINING";
+    }
 
     dispatch("raytracer:benchmark-start", {
       source: "benchmark",
+      mode,
+      count,
     });
 
-    dispatch("raytracer:ai", {
-      action: "START_TRAINING",
-      source: "benchmark",
-    });
+    /* Exactly one AI event for training. */
+    dispatch("raytracer:ai", detail);
 
     renderTelemetry();
   }
@@ -1293,12 +1361,8 @@ const { autoOpen = false } = Astro.props;
       source: "benchmark",
     });
 
+    /* Renderer owns the STOP control path. */
     dispatch("raytracer:stop", {
-      source: "benchmark",
-    });
-
-    dispatch("raytracer:ai", {
-      action: "STOP",
       source: "benchmark",
     });
 
@@ -1361,10 +1425,34 @@ const { autoOpen = false } = Astro.props;
     }
 
     if (
-      command === "START" ||
-      command === "TRAIN"
+      command === "START"
     ) {
       requestStart();
+      return true;
+    }
+
+    if (
+      command === "TRAIN"
+    ) {
+      const count = Math.max(
+        1,
+        integer(tokens[1], 250),
+      );
+
+      requestStart(count, "steps");
+      return true;
+    }
+
+    if (
+      command === "EPISODES" ||
+      command === "TRAIN-EPISODES"
+    ) {
+      const count = Math.max(
+        1,
+        integer(tokens[1], 1),
+      );
+
+      requestStart(count, "episodes");
       return true;
     }
 
@@ -1387,7 +1475,7 @@ const { autoOpen = false } = Astro.props;
       command === "CLEAR" ||
       command === "CLS"
     ) {
-      history.length = 0;
+      episodeHistory.length = 0;
       lastHistoryEpisode = -1;
       clearScreen();
       addComment(
@@ -1399,7 +1487,7 @@ const { autoOpen = false } = Astro.props;
     if (
       command === "RESET"
     ) {
-      history.length = 0;
+      episodeHistory.length = 0;
       lastHistoryEpisode = -1;
 
       dispatch("raytracer:benchmark-reset", {
@@ -1472,6 +1560,34 @@ const { autoOpen = false } = Astro.props;
 
       renderTelemetry();
       return true;
+    }
+
+    if (
+      command === "SAVE" ||
+      command === "LOAD" ||
+      command === "EXPORT" ||
+      command === "IMPORT"
+    ) {
+      const target = upper(tokens[1]);
+
+      if (target === "MODEL" || target === "CHECKPOINT") {
+        const actionMap: Record<string, string> = {
+          SAVE: "SAVE_MODEL",
+          LOAD: "LOAD_MODEL",
+          EXPORT: "EXPORT_MODEL",
+          IMPORT: "IMPORT_MODEL",
+        };
+
+        dispatch("raytracer:ai", {
+          action: actionMap[command],
+          source: "benchmark",
+        });
+
+        setMode(`MODEL-${command}`);
+        setState("RUNNING");
+        renderTelemetry();
+        return true;
+      }
     }
 
     if (
@@ -1580,34 +1696,34 @@ const { autoOpen = false } = Astro.props;
     addSection("METRICS");
 
     addRow(
-      130,
+      180,
       "GPU",
       "ADAPTER / DEVICE / FRAME-TIME / FPS",
     );
     addRow(
-      140,
+      190,
       "AI",
       "SENSORS / MODEL / PARAMETER COUNT",
     );
     addRow(
-      150,
+      200,
       "ENV",
       "SEED / EPISODE / STEP / OBSTACLES",
     );
     addRow(
-      160,
+      210,
       "TRAIN",
-      "REWARD / LOSS / EPSILON / REPLAY",
+      "REWARD / LOSS / EPSILON / REPLAY / TRAIN STEPS",
     );
     addRow(
-      170,
+      220,
       "RESULT",
       "SUCCESS / COLLISION / DONE",
     );
     addRow(
-      180,
+      230,
       "THROUGHPUT",
-      "RAYS / SEC / SAMPLES / SEC",
+      "PRIMARY RAYS / SEC / SAMPLES / SEC",
     );
 
     addComment(
@@ -1648,6 +1764,9 @@ const { autoOpen = false } = Astro.props;
     },
   );
 
+  const commandHistory: string[] = [];
+  let historyIndex = -1;
+
   commandInput.addEventListener(
     "keydown",
     (event) => {
@@ -1655,7 +1774,48 @@ const { autoOpen = false } = Astro.props;
         event.key === "Enter"
       ) {
         event.preventDefault();
+        const command = commandInput.value.trim();
+        if (command) {
+          commandHistory.unshift(command);
+          if (commandHistory.length > 100) {
+            commandHistory.length = 100;
+          }
+        }
+        historyIndex = -1;
         commandButton.click();
+        return;
+      }
+
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        if (!commandHistory.length) return;
+        historyIndex = Math.min(
+          historyIndex + 1,
+          commandHistory.length - 1,
+        );
+        commandInput.value = commandHistory[historyIndex] ?? "";
+        commandInput.setSelectionRange(
+          commandInput.value.length,
+          commandInput.value.length,
+        );
+        return;
+      }
+
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        if (!commandHistory.length) return;
+        historyIndex = Math.max(
+          historyIndex - 1,
+          -1,
+        );
+        commandInput.value =
+          historyIndex === -1
+            ? ""
+            : commandHistory[historyIndex] ?? "";
+        commandInput.setSelectionRange(
+          commandInput.value.length,
+          commandInput.value.length,
+        );
       }
     },
   );
@@ -1787,6 +1947,67 @@ const { autoOpen = false } = Astro.props;
   );
 
   window.addEventListener(
+    "raytracer:training-progress",
+    (event) => {
+      const detail =
+        (event as CustomEvent<AnyRecord>).detail ?? {};
+
+      mergeTelemetry({
+        ...detail,
+        state: "RUNNING",
+        status:
+          detail.status ??
+          (detail.requested
+            ? `TRAINING ${integer(detail.completed)}/${integer(detail.requested)}`
+            : `TRAINING ${integer(detail.completed)}`),
+        trainCompleted:
+          detail.completed ??
+          telemetry.trainCompleted,
+        trainRequested:
+          detail.requested ??
+          telemetry.trainRequested,
+        trainingSteps:
+          detail.trainingSteps ??
+          telemetry.trainingSteps,
+      });
+
+      benchmarkRunning = true;
+      setMode("TRAIN");
+      setState("RUNNING");
+    },
+  );
+
+  window.addEventListener(
+    "raytracer:ai-episode",
+    (event) => {
+      const detail =
+        (event as CustomEvent<AnyRecord>).detail ?? {};
+
+      mergeTelemetry({
+        episode: detail.episode ?? telemetry.episode,
+        reward: detail.reward ?? telemetry.reward,
+        success: detail.success ?? telemetry.success,
+        collision: detail.collision ?? telemetry.collision,
+        done: 1,
+      });
+    },
+  );
+
+  window.addEventListener(
+    "raytracer:renderer-ready",
+    (event) => {
+      const detail =
+        (event as CustomEvent<AnyRecord>).detail ?? {};
+
+      mergeTelemetry({
+        aiBackend: detail.backend ?? telemetry.aiBackend,
+        aiVersion: detail.version ?? telemetry.aiVersion,
+        timestamp: Date.now(),
+      });
+    },
+  );
+
+  window.addEventListener(
     "raytracer:ai-error",
     (event) => {
       const detail =
@@ -1868,7 +2089,7 @@ const { autoOpen = false } = Astro.props;
     },
 
     clear(): void {
-      history.length = 0;
+      episodeHistory.length = 0;
       lastHistoryEpisode = -1;
       renderTelemetry();
     },
@@ -1898,7 +2119,7 @@ const { autoOpen = false } = Astro.props;
     },
 
     getHistory(): HistoryPoint[] {
-      return clone(history);
+      return clone(episodeHistory);
     },
 
     update(detail: AnyRecord): void {
@@ -1912,5 +2133,7 @@ const { autoOpen = false } = Astro.props;
     }
   ).RayTracerBenchmark = api;
 
+  telemetry.timestamp = Date.now();
+  deriveThroughput();
   renderTelemetry();
 </script>

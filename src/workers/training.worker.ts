@@ -1,3 +1,21 @@
+/*
+ * RAYTRC.AI.NAV / TRAINING WORKER
+ *
+ * Browser-side background trainer for Rust + WASM DQN navigation.
+ *
+ * Contract:
+ *   START     -> train steps / episodes / continuous
+ *   EVALUATE  -> deterministic evaluation using the current model
+ *   STOP      -> cancel the active job between WASM chunks
+ *
+ * Checkpoint V2 notes:
+ *   - export_model/import_model may contain the FULL training checkpoint.
+ *   - A successfully imported checkpoint keeps its environment state.
+ *   - Current UI trainer hyperparameters are applied after import.
+ *   - Environment configuration is only applied to a fresh model unless
+ *     forceEnvironmentConfig is explicitly requested.
+ */
+
 export type TrainingWorkerConfig = {
   difficulty: number;
   obstacles: number;
@@ -11,13 +29,17 @@ export type TrainingWorkerConfig = {
   targetUpdate: number;
 };
 
+type TrainingMode = "steps" | "episodes" | "continuous";
+
 type Engine = {
   version(): string;
   backend(): string;
+
   current_seed(): number;
   current_step(): number;
   current_episode(): number | bigint;
   training_step_count?: () => number | bigint;
+
   is_done(): boolean;
   is_success(): boolean;
   is_collision(): boolean;
@@ -25,12 +47,16 @@ type Engine = {
   last_terminal_success?: () => boolean;
   last_terminal_collision?: () => boolean;
   last_terminal_distance?: () => number;
+
   epsilon(): number;
+  learning_rate?: () => number;
+  gamma?: () => number;
   last_loss(): number;
   last_reward(): number;
   last_episode_reward(): number;
   last_episode_steps(): number;
   replay_size(): number;
+
   sensor_count(): number;
   observation_size(): number;
   action_count(): number;
@@ -49,12 +75,8 @@ type Engine = {
 
   reset_environment(seed: number): void;
 
-  train_steps(
-    count: number,
-  ): number[] | Float32Array;
-
-  train_episode():
-    number[] | Float32Array;
+  train_steps(count: number): number[] | Float32Array;
+  train_episode(): number[] | Float32Array;
 
   evaluate_episodes(
     count: number,
@@ -62,18 +84,19 @@ type Engine = {
   ): number[] | Float32Array;
 
   metrics(): number[] | Float32Array;
+
   export_model(): string;
   import_model(data: string): boolean;
+  export_policy(): string;
+  import_policy(data: string): boolean;
 };
 
 type WasmModule = {
-  default(
-    input?: unknown,
-  ): Promise<unknown>;
-
-  RayTracerEngine:
-    new () => Engine;
+  default(input?: unknown): Promise<unknown>;
+  RayTracerEngine: new () => Engine;
 };
+
+type WorkerMessage = Record<string, unknown>;
 
 const BASE = (() => {
   const env =
@@ -81,270 +104,249 @@ const BASE = (() => {
       env?: { BASE_URL?: string };
     }).env;
 
-  const raw =
-    env?.BASE_URL ||
-    "/";
+  const raw = env?.BASE_URL || "/";
 
-  return raw.endsWith("/")
-    ? raw
-    : `${raw}/`;
+  return raw.endsWith("/") ? raw : `${raw}/`;
 })();
 
-const WASM_JS_URL =
-  new URL(
-    "wasm/raytracer.js",
-    new URL(
-      BASE,
-      self.location.href,
-    ),
-  ).href;
+const WASM_JS_URL = new URL(
+  "wasm/raytracer.js",
+  new URL(BASE, self.location.href),
+).href;
 
-let engine:
-  | Engine
-  | null = null;
+const DEFAULTS: TrainingWorkerConfig = {
+  difficulty: 3,
+  obstacles: 12,
+  episodeSteps: 1000,
+  learningRate: 0.0005,
+  gamma: 0.99,
+  batchSize: 64,
+  epsilon: 1.0,
+  epsilonMin: 0.05,
+  epsilonDecay: 0.99998,
+  targetUpdate: 128,
+};
 
+const MIN_CHUNK = 128;
+const MAX_CHUNK = 2048;
+const DEFAULT_CHUNK = 512;
+const PREVIEW_SYNC_STEPS = 1024;
+const PREVIEW_SYNC_EPISODES = 1;
+
+let engine: Engine | null = null;
 let activeJobId = -1;
 let active = false;
+let generation = 0;
 
-function finite(
-  value: unknown,
-  fallback = 0,
-): number {
-  const numeric =
-    Number(value);
-
-  return Number.isFinite(
-    numeric,
-  )
-    ? numeric
-    : fallback;
+function finite(value: unknown, fallback = 0): number {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
 }
 
-function safeBuffer(
-  value: unknown,
-): number[] {
-  if (
-    value === null ||
-    value === undefined
-  ) {
+function integer(value: unknown, fallback = 0): number {
+  return Math.floor(finite(value, fallback));
+}
+
+function clamp(value: unknown, min: number, max: number, fallback: number): number {
+  return Math.min(max, Math.max(min, finite(value, fallback)));
+}
+
+function clampInt(value: unknown, min: number, max: number, fallback: number): number {
+  return Math.min(max, Math.max(min, integer(value, fallback)));
+}
+
+function safeBuffer(value: unknown): number[] {
+  if (value === null || value === undefined) {
     return [];
   }
 
-  if (
-    Array.isArray(value)
-  ) {
-    return value.map(
-      (item) =>
-        finite(item),
+  if (Array.isArray(value)) {
+    return value.map((item) => finite(item));
+  }
+
+  if (ArrayBuffer.isView(value)) {
+    const view = value as unknown as ArrayLike<unknown>;
+
+    return Array.from(
+      { length: view.length },
+      (_, index) => finite(view[index]),
     );
   }
 
   if (
-    ArrayBuffer.isView(value)
+    typeof value === "object" &&
+    value !== null &&
+    Symbol.iterator in value
   ) {
-    const view =
-      value as unknown as
-        ArrayLike<unknown>;
-
-    return Array.from(
-      {
-        length:
-          view.length,
-      },
-      (_, index) =>
-        finite(
-          view[index],
-        ),
-    );
+    try {
+      return Array.from(
+        value as Iterable<unknown>,
+        (item) => finite(item),
+      );
+    } catch {
+      return [];
+    }
   }
 
   return [];
 }
 
-async function
-importPublicWasmModule(
-  url: string,
-): Promise<WasmModule> {
-  const nativeImport =
-    new Function(
-      "url",
-      "return import(url);",
-    ) as (
-      url: string,
-    ) => Promise<WasmModule>;
+async function importPublicWasmModule(url: string): Promise<WasmModule> {
+  const nativeImport = new Function(
+    "url",
+    "return import(url);",
+  ) as (url: string) => Promise<WasmModule>;
 
-  return nativeImport(
-    url,
-  );
+  return nativeImport(url);
 }
 
-async function loadEngine():
-  Promise<Engine> {
-  if (
-    engine
-  ) {
+async function loadEngine(): Promise<Engine> {
+  if (engine) {
     return engine;
   }
 
-  const response =
-    await fetch(
-      WASM_JS_URL,
-      {
-        cache:
-          "no-cache",
-      },
-    );
+  const response = await fetch(WASM_JS_URL, {
+    cache: "no-cache",
+  });
 
-  if (
-    !response.ok
-  ) {
-    throw new Error(
-      `WASM loader HTTP ${response.status}`,
-    );
+  if (!response.ok) {
+    throw new Error(`WASM loader HTTP ${response.status}`);
   }
 
-  const contentType =
-    response.headers.get(
-      "content-type",
-    ) ?? "";
+  const contentType = (
+    response.headers.get("content-type") || ""
+  ).toLowerCase();
 
-  if (
-    contentType.includes(
-      "text/html",
-    )
-  ) {
+  if (contentType.includes("text/html")) {
     throw new Error(
       "WASM loader resolved to HTML instead of JavaScript",
     );
   }
 
-  const imported =
-    await importPublicWasmModule(
-      WASM_JS_URL,
-    );
+  const imported = await importPublicWasmModule(WASM_JS_URL);
+
+  if (typeof imported.default !== "function") {
+    throw new Error("WASM DEFAULT INITIALIZER NOT FOUND");
+  }
+
+  if (typeof imported.RayTracerEngine !== "function") {
+    throw new Error("RayTracerEngine EXPORT NOT FOUND");
+  }
 
   await imported.default();
 
-  engine =
-    new imported.RayTracerEngine();
-
+  engine = new imported.RayTracerEngine();
   return engine;
+}
+
+function normalizeConfig(
+  incoming: Partial<TrainingWorkerConfig> | TrainingWorkerConfig,
+): TrainingWorkerConfig {
+  return {
+    difficulty: clampInt(
+      incoming.difficulty,
+      1,
+      10,
+      DEFAULTS.difficulty,
+    ),
+
+    obstacles: clampInt(
+      incoming.obstacles,
+      1,
+      64,
+      DEFAULTS.obstacles,
+    ),
+
+    episodeSteps: clampInt(
+      incoming.episodeSteps,
+      50,
+      5000,
+      DEFAULTS.episodeSteps,
+    ),
+
+    learningRate: clamp(
+      incoming.learningRate,
+      0.00001,
+      0.1,
+      DEFAULTS.learningRate,
+    ),
+
+    gamma: clamp(
+      incoming.gamma,
+      0.80,
+      0.9999,
+      DEFAULTS.gamma,
+    ),
+
+    batchSize: clampInt(
+      incoming.batchSize,
+      1,
+      256,
+      DEFAULTS.batchSize,
+    ),
+
+    epsilon: clamp(
+      incoming.epsilon,
+      0,
+      1,
+      DEFAULTS.epsilon,
+    ),
+
+    epsilonMin: clamp(
+      incoming.epsilonMin,
+      0,
+      1,
+      DEFAULTS.epsilonMin,
+    ),
+
+    epsilonDecay: clamp(
+      incoming.epsilonDecay,
+      0.9,
+      0.999999,
+      DEFAULTS.epsilonDecay,
+    ),
+
+    targetUpdate: clampInt(
+      incoming.targetUpdate,
+      1,
+      100000,
+      DEFAULTS.targetUpdate,
+    ),
+  };
+}
+
+function applyEnvironmentConfig(
+  target: Engine,
+  config: TrainingWorkerConfig,
+): void {
+  target.set_difficulty(config.difficulty);
+  target.set_obstacle_count(config.obstacles);
+  target.set_episode_steps(config.episodeSteps);
+}
+
+function applyTrainingConfig(
+  target: Engine,
+  config: TrainingWorkerConfig,
+): void {
+  target.set_learning_rate(config.learningRate);
+  target.set_gamma(config.gamma);
+  target.set_batch_size(config.batchSize);
+  target.set_epsilon(config.epsilon);
+  target.set_epsilon_min(config.epsilonMin);
+  target.set_epsilon_decay(config.epsilonDecay);
+  target.set_target_update(config.targetUpdate);
 }
 
 function applyConfig(
   target: Engine,
-  config:
-    TrainingWorkerConfig,
+  config: TrainingWorkerConfig,
+  preserveCheckpointEnvironment = false,
 ): void {
-  target.set_difficulty(
-    Math.max(
-      1,
-      Math.min(
-        10,
-        Math.floor(
-          config.difficulty,
-        ),
-      ),
-    ),
-  );
+  if (!preserveCheckpointEnvironment) {
+    applyEnvironmentConfig(target, config);
+  }
 
-  target.set_obstacle_count(
-    Math.max(
-      1,
-      Math.min(
-        64,
-        Math.floor(
-          config.obstacles,
-        ),
-      ),
-    ),
-  );
-
-  target.set_episode_steps(
-    Math.max(
-      50,
-      Math.min(
-        5000,
-        Math.floor(
-          config.episodeSteps,
-        ),
-      ),
-    ),
-  );
-
-  target.set_learning_rate(
-    Math.max(
-      0.00001,
-      Math.min(
-        0.1,
-        config.learningRate,
-      ),
-    ),
-  );
-
-  target.set_gamma(
-    Math.max(
-      0.80,
-      Math.min(
-        0.9999,
-        config.gamma,
-      ),
-    ),
-  );
-
-  target.set_batch_size(
-    Math.max(
-      1,
-      Math.min(
-        256,
-        Math.floor(
-          config.batchSize,
-        ),
-      ),
-    ),
-  );
-
-  target.set_epsilon(
-    Math.max(
-      0,
-      Math.min(
-        1,
-        config.epsilon,
-      ),
-    ),
-  );
-
-  target.set_epsilon_min(
-    Math.max(
-      0,
-      Math.min(
-        1,
-        config.epsilonMin,
-      ),
-    ),
-  );
-
-  target.set_epsilon_decay(
-    Math.max(
-      0.9,
-      Math.min(
-        0.999999,
-        config.epsilonDecay,
-      ),
-    ),
-  );
-
-  target.set_target_update(
-    Math.max(
-      1,
-      Math.min(
-        100000,
-        Math.floor(
-          config.targetUpdate,
-        ),
-      ),
-    ),
-  );
+  applyTrainingConfig(target, config);
 }
 
 function metricVector(target: Engine): number[] {
@@ -360,8 +362,7 @@ function trainingStepCount(target: Engine): number {
     return finite(target.training_step_count());
   }
 
-  // Backward-compatible fallback for an older wasm-bindgen build.
-  // metrics()[1] is training_steps in the Rust engine contract.
+  // Compatibility fallback: metrics()[1] is training_steps in the Rust contract.
   return finite(metricVector(target)[1]);
 }
 
@@ -369,13 +370,24 @@ function terminalFlag(
   target: Engine,
   kind: "done" | "success" | "collision",
 ): boolean {
-  if (kind === "done" && typeof target.last_terminal_done === "function") {
+  if (
+    kind === "done" &&
+    typeof target.last_terminal_done === "function"
+  ) {
     return target.last_terminal_done();
   }
-  if (kind === "success" && typeof target.last_terminal_success === "function") {
+
+  if (
+    kind === "success" &&
+    typeof target.last_terminal_success === "function"
+  ) {
     return target.last_terminal_success();
   }
-  if (kind === "collision" && typeof target.last_terminal_collision === "function") {
+
+  if (
+    kind === "collision" &&
+    typeof target.last_terminal_collision === "function"
+  ) {
     return target.last_terminal_collision();
   }
 
@@ -392,647 +404,464 @@ function terminalDistance(target: Engine): number {
   return 0;
 }
 
-function telemetry(
-  target: Engine,
-): Record<string, unknown> {
-  return {
-    backend:
-      target.backend(),
+function telemetry(target: Engine): Record<string, unknown> {
+  const result: Record<string, unknown> = {
+    backend: target.backend(),
+    version: target.version(),
 
-    version:
-      target.version(),
+    seed: finite(target.current_seed()),
+    step: finite(target.current_step()),
+    trainingSteps: finite(trainingStepCount(target)),
+    episode: finite(target.current_episode()),
+    episodeSteps: finite(target.last_episode_steps()),
 
-    seed:
-      finite(
-        target.current_seed(),
-      ),
+    reward: finite(target.last_reward()),
+    episodeReward: finite(target.last_episode_reward()),
+    loss: finite(target.last_loss()),
+    epsilon: finite(target.epsilon()),
+    replay: finite(target.replay_size()),
 
-    step:
-      finite(
-        target.current_step(),
-      ),
+    success: target.is_success(),
+    collision: target.is_collision(),
+    done: target.is_done(),
 
-    trainingSteps:
-      finite(
-        trainingStepCount(target),
-      ),
+    lastTerminalDone: terminalFlag(target, "done"),
+    lastTerminalSuccess: terminalFlag(target, "success"),
+    lastTerminalCollision: terminalFlag(target, "collision"),
+    lastTerminalDistance: terminalDistance(target),
 
-    episode:
-      finite(
-        target.current_episode(),
-      ),
-
-    episodeSteps:
-      finite(
-        target.last_episode_steps(),
-      ),
-
-    reward:
-      finite(
-        target.last_reward(),
-      ),
-
-    episodeReward:
-      finite(
-        target.last_episode_reward(),
-      ),
-
-    loss:
-      finite(
-        target.last_loss(),
-      ),
-
-    epsilon:
-      finite(
-        target.epsilon(),
-      ),
-
-    replay:
-      finite(
-        target.replay_size(),
-      ),
-
-    success:
-      target.is_success(),
-
-    collision:
-      target.is_collision(),
-
-    done:
-      target.is_done(),
-
-    lastTerminalDone:
-      terminalFlag(target, "done"),
-
-    lastTerminalSuccess:
-      terminalFlag(target, "success"),
-
-    lastTerminalCollision:
-      terminalFlag(target, "collision"),
-
-    lastTerminalDistance:
-      finite(
-        terminalDistance(target),
-      ),
-
-    sensorCount:
-      finite(
-        target.sensor_count(),
-      ),
-
-    observationSize:
-      finite(
-        target.observation_size(),
-      ),
-
-    actionCount:
-      finite(
-        target.action_count(),
-      ),
-
-    parameterCount:
-      finite(
-        target.model_parameter_count(),
-      ),
+    sensorCount: finite(target.sensor_count()),
+    observationSize: finite(target.observation_size()),
+    actionCount: finite(target.action_count()),
+    parameterCount: finite(target.model_parameter_count()),
   };
+
+  if (typeof target.learning_rate === "function") {
+    result.learningRate = finite(target.learning_rate());
+  }
+
+  if (typeof target.gamma === "function") {
+    result.gamma = finite(target.gamma());
+  }
+
+  return result;
+}
+
+function modelKind(model: string): "checkpoint" | "legacy" | "unknown" {
+  const trimmed = model.trim();
+
+  if (
+    trimmed.startsWith("RAYTRC_NAV_CHECKPOINT_V2")
+  ) {
+    return "checkpoint";
+  }
+
+  if (
+    trimmed.startsWith("RAYTRC_NAV_MODEL_V1")
+  ) {
+    return "legacy";
+  }
+
+  return "unknown";
 }
 
 function post(
   type: string,
-  payload:
-    Record<string, unknown> = {},
+  payload: Record<string, unknown> = {},
 ): void {
   self.postMessage({
     type,
-    jobId:
-      activeJobId,
+    jobId: activeJobId,
     ...payload,
   });
 }
 
-function runTrainingChunk(
-  mode:
-    | "steps"
-    | "episodes"
-    | "continuous",
+function isJobActive(jobToken: number): boolean {
+  return active && jobToken === generation;
+}
 
-  requested: number,
-
-  chunk: number,
-
-  completed: number,
-
+function requestYield(
+  callback: () => void,
+  jobToken: number,
 ): void {
-  if (
-    !active ||
-    !engine
-  ) {
+  if (!isJobActive(jobToken)) {
+    return;
+  }
+
+  setTimeout(() => {
+    if (isJobActive(jobToken)) {
+      callback();
+    }
+  }, 0);
+}
+
+function sendProgress(
+  mode: TrainingMode,
+  requested: number,
+  completed: number,
+  target: Engine,
+  includeModel: boolean,
+): void {
+  const progressPayload: Record<string, unknown> = {
+    mode: mode === "episodes" ? "TRAIN-EPISODES" : "TRAIN",
+    state: "RUNNING",
+    status:
+      requested > 0
+        ? `TRAINING ${completed}/${requested}`
+        : `TRAINING ${completed}`,
+    completed,
+    requested,
+    message:
+      requested > 0
+        ? `TRAINING ${completed}/${requested}`
+        : `CONTINUOUS TRAINING ${completed}`,
+    ...telemetry(target),
+  };
+
+  if (includeModel) {
+    progressPayload.previewPolicy = target.export_policy();
+  }
+
+  post("PROGRESS", progressPayload);
+}
+
+function runTrainingChunk(
+  mode: TrainingMode,
+  requested: number,
+  chunk: number,
+  completed: number,
+  jobToken: number,
+): void {
+  if (!engine || !isJobActive(jobToken)) {
     return;
   }
 
   try {
-    const modelSyncStride =
-      mode === "episodes"
-        ? 1
-        : 128;
+    let nextCompleted = completed;
 
-    let nextCompleted =
-      completed;
-
-    if (
-      mode ===
-      "episodes"
-    ) {
+    if (mode === "episodes") {
       engine.train_episode();
       nextCompleted += 1;
     } else {
-      const remaining =
-        Math.max(
-          0,
-          requested -
-            completed,
-        );
-
+      const remaining = Math.max(0, requested - completed);
       const amount =
-        mode ===
-          "continuous"
+        mode === "continuous"
           ? chunk
-          : Math.min(
-              chunk,
-              remaining,
-            );
+          : Math.min(chunk, remaining);
 
-      if (
-        amount > 0
-      ) {
-        engine.train_steps(
-          amount,
-        );
-
-        nextCompleted +=
-          amount;
+      if (amount > 0) {
+        engine.train_steps(amount);
+        nextCompleted += amount;
       }
     }
 
     const finished =
-      mode ===
-        "continuous"
-        ? false
-        : nextCompleted >=
-          requested;
+      mode !== "continuous" &&
+      nextCompleted >= requested;
 
-    const syncModel =
+    const syncStride =
+      mode === "episodes"
+        ? PREVIEW_SYNC_EPISODES
+        : PREVIEW_SYNC_STEPS;
+
+    const shouldSyncModel =
       finished ||
-      (
-        nextCompleted > 0 &&
-        (
-          nextCompleted %
-            modelSyncStride
-        ) < 1
-      );
+      (nextCompleted > 0 &&
+        nextCompleted % syncStride === 0);
 
-    const progressPayload:
-      Record<string, unknown> = {
-        mode:
-          mode ===
-          "episodes"
-            ? "TRAIN-EPISODES"
-            : "TRAIN",
-
-        state:
-          "RUNNING",
-
-        status:
-          requested > 0
-            ? `TRAINING ${nextCompleted}/${requested}`
-            : `TRAINING ${nextCompleted}`,
-
-        completed:
-          nextCompleted,
-
-        requested,
-
-        message:
-          requested > 0
-            ? `TRAINING ${nextCompleted}/${requested}`
-            : `CONTINUOUS TRAINING ${nextCompleted}`,
-
-        ...telemetry(
-          engine,
-        ),
-      };
-
-    /*
-     * Model snapshots are sent periodically, not on every small
-     * worker chunk. This keeps the main thread smooth while still
-     * allowing the live preview to follow learning.
-     */
-    if (syncModel) {
-      progressPayload.previewModel =
-        engine.export_model();
-    }
-
-    post(
-      "PROGRESS",
-      progressPayload,
+    sendProgress(
+      mode,
+      requested,
+      nextCompleted,
+      engine,
+      shouldSyncModel,
     );
 
-    if (
-      finished
-    ) {
-      const model =
-        engine.export_model();
+    if (finished) {
+      const model = engine.export_model();
+      const enginePolicy = engine.export_policy();
 
-      post(
-        "COMPLETE",
-        {
-          mode:
-            mode ===
-            "episodes"
-              ? "TRAIN-EPISODES"
-              : "TRAIN",
+      post("COMPLETE", {
+        mode: mode === "episodes" ? "TRAIN-EPISODES" : "TRAIN",
+        state: "COMPLETE",
+        status: "TRAINING COMPLETE / MODEL EXPORTED",
+        completed: nextCompleted,
+        requested,
+        checkpointType: modelKind(model),
+        model,
+        policyModel: enginePolicy,
+        message: "TRAINING COMPLETE / POLICY UPDATED",
+        ...telemetry(engine),
+      });
 
-          state:
-            "COMPLETE",
-
-          status:
-            "TRAINING COMPLETE / MODEL EXPORTED",
-
-          completed:
-            nextCompleted,
-
-          requested,
-
-          model,
-
-          message:
-            "TRAINING COMPLETE / MODEL APPLIED TO PREVIEW",
-
-          ...telemetry(
-            engine,
-          ),
-        },
-      );
-
-      active =
-        false;
-
+      active = false;
       return;
     }
 
-    /*
-     * Yield to the worker event loop.
-     * This makes cancellation responsive
-     * between WASM chunks.
-     */
-    setTimeout(
-      () =>
+    requestYield(
+      () => {
         runTrainingChunk(
           mode,
           requested,
           chunk,
           nextCompleted,
-        ),
-      0,
-    );
-  } catch (
-    error
-  ) {
-    active =
-      false;
-
-    post(
-      "ERROR",
-      {
-        message:
-          error instanceof Error
-            ? error.message
-            : String(error),
+          jobToken,
+        );
       },
+      jobToken,
     );
+  } catch (error) {
+    active = false;
+
+    post("ERROR", {
+      message:
+        error instanceof Error
+          ? error.message
+          : String(error),
+    });
   }
 }
 
-async function startTraining(
-  message:
-    Record<string, unknown>,
-): Promise<void> {
-  activeJobId =
-    finite(
-      message.jobId,
-      -1,
-    );
+async function startTraining(message: WorkerMessage): Promise<void> {
+  generation += 1;
+  const jobToken = generation;
 
-  active =
-    true;
+  active = true;
+  activeJobId = integer(message.jobId, -1);
 
-  const target =
-    await loadEngine();
+  const target = await loadEngine();
 
-  const model =
-    String(
-      message.model ??
-        "",
-    );
-
-  if (
-    model &&
-    !target.import_model(
-      model,
-    )
-  ) {
-    throw new Error(
-      "training worker could not import the current model",
-    );
+  if (!isJobActive(jobToken)) {
+    return;
   }
 
-  // Apply the current UI training configuration AFTER model import.
-  // import_model() restores learning_rate/gamma/epsilon from the snapshot,
-  // which otherwise silently overrides the user's current settings.
-  applyConfig(
-    target,
-    (message.config ??
-      {}) as TrainingWorkerConfig,
+  const config = normalizeConfig(
+    (message.config ?? {}) as Partial<TrainingWorkerConfig>,
   );
 
-  const seed =
-    finite(
+  const model = String(message.model ?? "").trim();
+
+  let importedCheckpoint = false;
+
+  if (model) {
+    const imported = target.import_model(model);
+
+    if (!imported) {
+      throw new Error(
+        `training worker could not import ${modelKind(model) === "checkpoint" ? "checkpoint" : "model"}`,
+      );
+    }
+
+    importedCheckpoint = modelKind(model) === "checkpoint";
+  }
+
+  /*
+   * Training hyperparameters always follow the current UI configuration.
+   * A V2 checkpoint keeps its complete environment/replay/RNG state;
+   * environment configuration is not silently reset after import.
+   */
+  applyConfig(target, config, importedCheckpoint);
+
+  if (!model || !importedCheckpoint) {
+    const seed = finite(
       message.seed,
       Date.now() >>> 0,
-    );
+    ) >>> 0;
 
-  target.reset_environment(
-    seed,
+    target.reset_environment(seed);
+  }
+
+  const mode = String(
+    message.mode ?? "steps",
+  ).toLowerCase() as TrainingMode;
+
+  if (
+    mode !== "steps" &&
+    mode !== "episodes" &&
+    mode !== "continuous"
+  ) {
+    throw new Error(`unsupported training mode: ${mode}`);
+  }
+
+  const requested = Math.max(
+    0,
+    integer(message.requested, 0),
   );
 
-  const mode =
-    String(
-      message.mode ??
-        "steps",
-    ) as
-      | "steps"
-      | "episodes"
-      | "continuous";
-
-  const requested =
-    Math.max(
-      0,
-      Math.floor(
-        finite(
-          message.requested,
-          0,
-        ),
-      ),
-    );
-
-  const chunk =
-    Math.max(
-      128,
-      Math.min(
-        2048,
-        Math.floor(
-          finite(
-            message.chunk,
-            1024,
-          ),
-        ),
-      ),
-    );
-
-  post(
-    "PROGRESS",
-    {
-      mode:
-        mode ===
-        "episodes"
-          ? "TRAIN-EPISODES"
-          : "TRAIN",
-
-      state:
-        "RUNNING",
-
-      status:
-        "TRAINING WORKER READY",
-
-      completed:
-        0,
-
-      requested,
-
-      ...telemetry(
-        target,
-      ),
-    },
+  const chunk = clampInt(
+    message.chunk,
+    MIN_CHUNK,
+    MAX_CHUNK,
+    DEFAULT_CHUNK,
   );
+
+  if (
+    !isJobActive(jobToken)
+  ) {
+    return;
+  }
+
+  post("PROGRESS", {
+    mode: mode === "episodes" ? "TRAIN-EPISODES" : "TRAIN",
+    state: "RUNNING",
+    status: importedCheckpoint
+      ? "CHECKPOINT RESTORED / TRAINING WORKER READY"
+      : "TRAINING WORKER READY",
+    completed: 0,
+    requested,
+    checkpointType: importedCheckpoint ? "RAYTRC_NAV_CHECKPOINT_V2" : "NEW",
+    checkpointRestored: importedCheckpoint,
+    ...telemetry(target),
+  });
 
   runTrainingChunk(
     mode,
     requested,
     chunk,
     0,
+    jobToken,
   );
 }
 
-async function evaluate(
-  message:
-    Record<string, unknown>,
-): Promise<void> {
-  activeJobId =
-    finite(
-      message.jobId,
-      -1,
-    );
+async function evaluate(message: WorkerMessage): Promise<void> {
+  generation += 1;
+  const jobToken = generation;
 
-  active =
-    true;
+  active = true;
+  activeJobId = integer(message.jobId, -1);
 
-  const target =
-    await loadEngine();
+  const target = await loadEngine();
 
-  const model =
-    String(
-      message.model ??
-        "",
-    );
-
-  if (
-    model &&
-    !target.import_model(
-      model,
-    )
-  ) {
-    throw new Error(
-      "evaluation worker could not import the current model",
-    );
+  if (!isJobActive(jobToken)) {
+    return;
   }
 
-  // Apply the current UI training configuration AFTER model import.
-  // import_model() restores learning_rate/gamma/epsilon from the snapshot,
-  // which otherwise silently overrides the user's current settings.
-  applyConfig(
-    target,
-    (message.config ??
-      {}) as TrainingWorkerConfig,
+  const config = normalizeConfig(
+    (message.config ?? {}) as Partial<TrainingWorkerConfig>,
   );
 
-  const requested =
-    Math.max(
-      1,
-      Math.min(
-        10000,
-        Math.floor(
-          finite(
-            message.requested,
-            1,
-          ),
-        ),
-      ),
-    );
+  const model = String(message.model ?? "").trim();
+  let importedCheckpoint = false;
+
+  if (model) {
+    const imported = target.import_model(model);
+
+    if (!imported) {
+      throw new Error(
+        `evaluation worker could not import ${modelKind(model) === "checkpoint" ? "checkpoint" : "model"}`,
+      );
+    }
+
+    importedCheckpoint = modelKind(model) === "checkpoint";
+  }
+
+  /*
+   * Preserve checkpoint environment for exact evaluation. For a legacy/new
+   * model, apply the current UI environment configuration and start at the
+   * requested deterministic base seed.
+   */
+  applyConfig(target, config, importedCheckpoint);
+
+  const requested = clampInt(
+    message.requested,
+    1,
+    10000,
+    1,
+  );
 
   const baseSeed =
     finite(
       message.baseSeed,
       Date.now() >>> 0,
-    );
+    ) >>> 0;
 
-  const result =
-    safeBuffer(
-      target.evaluate_episodes(
-        requested,
-        baseSeed,
-      ),
-    );
+  if (!importedCheckpoint) {
+    target.reset_environment(baseSeed);
+  }
+
+  const result = safeBuffer(
+    target.evaluate_episodes(
+      requested,
+      baseSeed,
+    ),
+  );
+
+  if (!isJobActive(jobToken)) {
+    return;
+  }
 
   const average =
     result.length > 0
       ? result.reduce(
-          (
-            total,
-            value,
-          ) =>
-            total +
-            value,
+          (total, value) => total + value,
           0,
-        ) /
-        result.length
+        ) / result.length
       : 0;
 
-  post(
-    "EVAL_COMPLETE",
-    {
-      requested,
-      baseSeed,
-      results:
-        result,
-      average,
-      ...telemetry(
-        target,
-      ),
-    },
-  );
+  post("EVAL_COMPLETE", {
+    requested,
+    baseSeed,
+    checkpointRestored: importedCheckpoint,
+    results: result,
+    average,
+    ...telemetry(target),
+  });
 
-  active =
-    false;
+  active = false;
 }
 
-self.addEventListener(
-  "message",
-  (
-    event:
-      MessageEvent,
-  ) => {
-    const message =
-      (event.data ??
-        {}) as Record<
-        string,
-        unknown
-      >;
+function stopActiveJob(): void {
+  active = false;
+  generation += 1;
+  activeJobId = -1;
+}
 
-    const type =
-      String(
-        message.type ??
-          "",
-      ).toUpperCase();
+self.addEventListener("message", (event: MessageEvent) => {
+  const message = (event.data ?? {}) as WorkerMessage;
+  const type = String(message.type ?? "").toUpperCase();
 
-    if (
-      type ===
-      "STOP"
-    ) {
-      active =
-        false;
-      return;
-    }
+  if (type === "STOP") {
+    stopActiveJob();
+    return;
+  }
 
-    if (
-      type ===
-      "START"
-    ) {
-      startTraining(
-        message,
-      ).catch(
-        (
-          error,
-        ) => {
-          active =
-            false;
+  if (type === "START") {
+    /*
+     * A newer START supersedes the previous job. Timers from the previous
+     * generation become no-ops through isJobActive().
+     */
+    active = false;
+    generation += 1;
 
-          activeJobId =
-            finite(
-              message.jobId,
-              -1,
-            );
+    startTraining(message).catch((error) => {
+      active = false;
+      activeJobId = integer(message.jobId, -1);
 
-          post(
-            "ERROR",
-            {
-              message:
-                error instanceof
-                Error
-                  ? error.message
-                  : String(
-                      error,
-                    ),
-            },
-          );
-        },
-      );
+      post("ERROR", {
+        message:
+          error instanceof Error
+            ? error.message
+            : String(error),
+      });
+    });
 
-      return;
-    }
+    return;
+  }
 
-    if (
-      type ===
-      "EVALUATE"
-    ) {
-      evaluate(
-        message,
-      ).catch(
-        (
-          error,
-        ) => {
-          active =
-            false;
+  if (type === "EVALUATE") {
+    active = false;
+    generation += 1;
 
-          activeJobId =
-            finite(
-              message.jobId,
-              -1,
-            );
+    evaluate(message).catch((error) => {
+      active = false;
+      activeJobId = integer(message.jobId, -1);
 
-          post(
-            "ERROR",
-            {
-              message:
-                error instanceof
-                Error
-                  ? error.message
-                  : String(
-                      error,
-                    ),
-            },
-          );
-        },
-      );
-    }
-  },
-);
+      post("ERROR", {
+        message:
+          error instanceof Error
+            ? error.message
+            : String(error),
+      });
+    });
+  }
+});

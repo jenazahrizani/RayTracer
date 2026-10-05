@@ -1,14 +1,57 @@
+// ============================================================================
+// RAYTRC.GPU / shaders/raytracer.wgsl
+// ============================================================================
+// Compute path tracer used by the RAYTRC renderer.
+//
+// IMPORTANT HOST CONTRACT
+// -----------------------
+// Params is exactly 10 x vec4<f32> = 160 bytes. Keep the order unchanged.
+//
+//   resolutionTime : x width, y height, z frame/sample serial, w seed/time
+//   quality        : x samples-per-dispatch, y bounce limit,
+//                    z accumulation enabled, w exposure (display shader)
+//   cameraPosition : xyz position, w reserved
+//   cameraRotation : x pitch degrees, y yaw degrees
+//   cameraProjection: x FOV degrees, y aspect ratio
+//   lightPosition  : xyz point-light position, w power
+//   lightParams    : x light intensity multiplier, y/z/w reserved
+//   material       : x roughness, y metallic, z IOR, w material mode
+//   sceneParams    : x object count, y reserved, z scene id, w revision/reset
+//   padding        : reserved
+//
+// OUTPUT BUFFER
+// ------------
+// accumulation[index].rgb = running HDR SUM
+// accumulation[index].a   = accumulated sample count
+//
+// The display shader divides rgb by a and then applies exposure/tonemapping.
+// ============================================================================
+
+const PI: f32 = 3.14159265358979323846;
+const INV_PI: f32 = 0.31830988618379067154;
+const TWO_PI: f32 = 6.28318530717958647692;
+
+const EPSILON: f32 = 0.0005;
+const FAR_DISTANCE: f32 = 250.0;
+const MAX_BOUNCES: u32 = 16u;
+const MAX_SAMPLES: u32 = 2048u;
+
 struct Params {
-    resolutionTime: vec4f,     // width, height, frame, time
-    quality: vec4f,            // samples, bounces, accumulation, exposure
-    cameraPosition: vec4f,    // xyz + unused
-    cameraRotation: vec4f,    // pitch, yaw, unused, unused
-    cameraProjection: vec4f,   // fovDeg, aspect, unused, unused
-    lightPosition: vec4f,     // xyz + unused
-    lightParams: vec4f,        // power, unused, unused, unused
-    material: vec4f,           // roughness, metallic, ior, materialId
-    sceneParams: vec4f,        // objectCount, unused, unused, unused
-    padding: vec4f
+    resolutionTime: vec4f,
+    quality: vec4f,
+    cameraPosition: vec4f,
+    cameraRotation: vec4f,
+    cameraProjection: vec4f,
+    lightPosition: vec4f,
+    lightParams: vec4f,
+    material: vec4f,
+    sceneParams: vec4f,
+    padding: vec4f,
+};
+
+struct Ray {
+    origin: vec3f,
+    direction: vec3f,
 };
 
 struct Hit {
@@ -20,24 +63,7 @@ struct Hit {
     roughness: f32,
     metallic: f32,
     ior: f32,
-};
-
-struct Ray {
-    origin: vec3f,
-    direction: vec3f,
-};
-
-struct Material {
-    albedo: vec3f,
-    roughness: f32,
-    metallic: f32,
-    ior: f32,
-};
-
-struct Sphere {
-    center: vec3f,
-    radius: f32,
-    material: Material,
+    transmission: f32,
 };
 
 @group(0) @binding(0)
@@ -46,209 +72,315 @@ var<uniform> params: Params;
 @group(0) @binding(1)
 var<storage, read_write> accumulation: array<vec4f>;
 
-const PI: f32 = 3.141592653589793;
-const INV_PI: f32 = 0.3183098861837907;
-const EPSILON: f32 = 0.0005;
-const MAX_BOUNCES: u32 = 32u;
-
-const SPHERE_0: Sphere = Sphere(
-    vec3f(-1.45, 0.85, 0.0),
-    0.85,
-    Material(
-        vec3f(0.12, 0.72, 0.92),
-        0.22,
-        0.05,
-        1.5
-    )
-);
-
-const SPHERE_1: Sphere = Sphere(
-    vec3f(1.25, 1.05, -0.55),
-    1.05,
-    Material(
-        vec3f(0.92, 0.18, 0.08),
-        0.16,
-        0.0,
-        1.5
-    )
-);
-
-const SPHERE_2: Sphere = Sphere(
-    vec3f(0.15, 0.52, 1.45),
-    0.52,
-    Material(
-        vec3f(0.96, 0.82, 0.16),
-        0.32,
-        0.78,
-        1.5
-    )
-);
+fn saturate(value: f32) -> f32 {
+    return clamp(value, 0.0, 1.0);
+}
 
 fn saturate3(value: vec3f) -> vec3f {
     return clamp(value, vec3f(0.0), vec3f(1.0));
 }
 
-fn saturate1(value: f32) -> f32 {
-    return clamp(value, 0.0, 1.0);
-}
-
-fn max3(value: vec3f) -> f32 {
-    return max(value.x, max(value.y, value.z));
-}
-
-fn hash11(value: f32) -> f32 {
-    var x = fract(value * 0.1031);
-    x *= x + 33.33;
-    x *= x + x;
-    return fract(x);
-}
-
-fn hash21(value: vec2f) -> f32 {
-    var p = fract(value * vec2f(123.34, 456.21));
-    p += dot(p, p + 45.32);
-    return fract(p.x * p.y);
-}
-
-fn hash31(value: vec3f) -> f32 {
-    var p = fract(value * 0.1031);
-    p += dot(p, p.yzx + 33.33);
-    return fract((p.x + p.y) * p.z);
-}
-
-fn random01(pixel: vec2u, frame: u32, dimension: u32) -> f32 {
-    let pixelSeed =
-        f32(pixel.x) * 0.06711056 +
-        f32(pixel.y) * 0.00583715 +
-        f32(frame) * 0.0007134 +
-        f32(dimension) * 17.123;
-
-    return hash11(pixelSeed + 0.1234567);
-}
-
-fn random2(
-    pixel: vec2u,
-    frame: u32,
-    dimension: u32
-) -> vec2f {
-    return vec2f(
-        random01(pixel, frame, dimension),
-        random01(pixel, frame, dimension + 1u)
-    );
-}
-
 fn safeNormalize(value: vec3f) -> vec3f {
     let lengthSquared = dot(value, value);
-
-    if (lengthSquared <= 0.0000001) {
+    if (lengthSquared <= 1.0e-12) {
         return vec3f(0.0, 1.0, 0.0);
     }
-
     return value * inverseSqrt(lengthSquared);
 }
 
-fn reflectDirection(
-    incident: vec3f,
-    normal: vec3f
-) -> vec3f {
-    return safeNormalize(
-        incident - 2.0 * dot(incident, normal) * normal
+fn maxComponent(value: vec3f) -> f32 {
+    return max(value.x, max(value.y, value.z));
+}
+
+fn makeMiss() -> Hit {
+    return Hit(
+        0.0,
+        FAR_DISTANCE,
+        vec3f(0.0),
+        vec3f(0.0, 1.0, 0.0),
+        vec3f(0.0),
+        1.0,
+        0.0,
+        1.5,
+        0.0
     );
 }
 
-fn refractDirection(
-    incident: vec3f,
+fn makeHit(
+    distance: f32,
+    position: vec3f,
     normal: vec3f,
-    eta: f32
-) -> vec3f {
-    let cosTheta = min(
-        dot(-incident, normal),
-        1.0
-    );
-
-    let perpendicular =
-        eta *
-        (incident + cosTheta * normal);
-
-    let parallelMagnitude =
-        -sqrt(
-            max(
-                0.0,
-                1.0 -
-                dot(perpendicular, perpendicular)
-            )
-        );
-
-    return safeNormalize(
-        perpendicular +
-        parallelMagnitude * normal
+    albedo: vec3f,
+    roughness: f32,
+    metallic: f32,
+    ior: f32,
+    transmission: f32
+) -> Hit {
+    return Hit(
+        1.0,
+        distance,
+        position,
+        safeNormalize(normal),
+        max(albedo, vec3f(0.0)),
+        clamp(roughness, 0.045, 1.0),
+        saturate(metallic),
+        max(ior, 1.001),
+        saturate(transmission)
     );
 }
 
-fn fresnelSchlick(
-    cosTheta: f32,
-    f0: vec3f
-) -> vec3f {
-    let factor =
-        pow(
-            1.0 - saturate1(cosTheta),
-            5.0
-        );
+// ---------------------------------------------------------------------------
+// Deterministic hash RNG. No mutable pointer parameters are used so this
+// remains friendly to current WGSL implementations in Chromium/Firefox/Safari.
+// ---------------------------------------------------------------------------
 
-    return f0 +
-        (vec3f(1.0) - f0) * factor;
+fn hash32(value: u32) -> u32 {
+    var x = value;
+    x ^= x >> 16u;
+    x *= 0x7feb352du;
+    x ^= x >> 15u;
+    x *= 0x846ca68bu;
+    x ^= x >> 16u;
+    return x;
 }
 
-fn distributionGGX(
-    normal: vec3f,
-    halfVector: vec3f,
-    roughness: f32
-) -> f32 {
-    let a = max(
-        0.045,
-        roughness
+fn hashToUnit(value: u32) -> f32 {
+    return f32(hash32(value) & 0x00ffffffu) / 16777216.0;
+}
+
+fn random01(pixel: vec2u, frame: u32, sampleIndex: u32, dimension: u32) -> f32 {
+    var seed = 0xA341316Cu;
+    seed ^= hash32(pixel.x * 1973u + 0x9E3779B9u);
+    seed ^= hash32(pixel.y * 9277u + 0x85EBCA6Bu);
+    seed ^= hash32(frame * 26699u + 0xC2B2AE35u);
+    seed ^= hash32(sampleIndex * 2246822519u + dimension * 3266489917u);
+    return hashToUnit(seed + dimension * 0x632BE59Bu);
+}
+
+fn random2(pixel: vec2u, frame: u32, sampleIndex: u32, dimension: u32) -> vec2f {
+    return vec2f(
+        random01(pixel, frame, sampleIndex, dimension),
+        random01(pixel, frame, sampleIndex, dimension + 1u)
     );
+}
 
-    let a2 =
-        a * a;
+// ---------------------------------------------------------------------------
+// Geometry
+// ---------------------------------------------------------------------------
 
-    let normalDotHalf =
-        max(
-            dot(normal, halfVector),
+fn intersectSphere(ray: Ray, center: vec3f, radius: f32) -> f32 {
+    let offset = ray.origin - center;
+    let halfB = dot(offset, ray.direction);
+    let c = dot(offset, offset) - radius * radius;
+    let discriminant = halfB * halfB - c;
+
+    if (discriminant < 0.0) {
+        return FAR_DISTANCE;
+    }
+
+    let root = sqrt(discriminant);
+    var t = -halfB - root;
+
+    if (t <= EPSILON) {
+        t = -halfB + root;
+    }
+
+    if (t <= EPSILON || t >= FAR_DISTANCE) {
+        return FAR_DISTANCE;
+    }
+
+    return t;
+}
+
+fn intersectPlane(ray: Ray, y: f32) -> f32 {
+    if (abs(ray.direction.y) <= 1.0e-6) {
+        return FAR_DISTANCE;
+    }
+
+    let distance = (y - ray.origin.y) / ray.direction.y;
+
+    if (distance <= EPSILON || distance >= FAR_DISTANCE) {
+        return FAR_DISTANCE;
+    }
+
+    return distance;
+}
+
+fn checkerColor(position: vec3f) -> vec3f {
+    let cell = i32(floor(position.x)) + i32(floor(position.z));
+    if ((cell & 1) == 0) {
+        return vec3f(0.72, 0.74, 0.76);
+    }
+    return vec3f(0.10, 0.11, 0.13);
+}
+
+fn intersectWorld(ray: Ray) -> Hit {
+    var closest = FAR_DISTANCE;
+    var result = makeMiss();
+
+    let objectCount = u32(clamp(params.sceneParams.x, 0.0, 3.0));
+    let sceneId = u32(max(params.sceneParams.z, 0.0));
+
+    // Ground.
+    let floorDistance = intersectPlane(ray, 0.0);
+    if (floorDistance < closest) {
+        let position = ray.origin + ray.direction * floorDistance;
+        closest = floorDistance;
+        result = makeHit(
+            floorDistance,
+            position,
+            vec3f(0.0, 1.0, 0.0),
+            checkerColor(position),
+            max(params.material.x, 0.72),
+            0.0,
+            1.50,
             0.0
         );
+    }
 
-    let normalDotHalf2 =
-        normalDotHalf *
-        normalDotHalf;
+    // Primary sphere. Its material follows the UI controls.
+    if (objectCount >= 1u) {
+        let center = vec3f(0.0, 1.0, 0.0);
+        let distance = intersectSphere(ray, center, 1.0);
 
-    let denominator =
-        normalDotHalf2 *
-        (a2 - 1.0) +
-        1.0;
+        if (distance < closest) {
+            let position = ray.origin + ray.direction * distance;
+            let materialMode = u32(max(params.material.w, 0.0));
+            let glassMode = select(0.0, 1.0, materialMode >= 2u);
 
-    return a2 /
-        max(
-            PI *
-            denominator *
-            denominator,
-            0.000001
-        );
+            closest = distance;
+            result = makeHit(
+                distance,
+                position,
+                position - center,
+                vec3f(0.78, 0.20, 0.055),
+                params.material.x,
+                params.material.y,
+                params.material.z,
+                glassMode
+            );
+        }
+    }
+
+    // Blue sphere.
+    if (objectCount >= 2u) {
+        let center = vec3f(-2.0, 0.75, -1.4);
+        let distance = intersectSphere(ray, center, 0.75);
+
+        if (distance < closest) {
+            let position = ray.origin + ray.direction * distance;
+            closest = distance;
+            result = makeHit(
+                distance,
+                position,
+                position - center,
+                vec3f(0.055, 0.22, 0.78),
+                0.32,
+                0.15,
+                1.50,
+                0.0
+            );
+        }
+    }
+
+    // Green metallic sphere. Scene id creates a tiny deterministic variation
+    // so map/scene changes are visible without changing host-side geometry.
+    if (objectCount >= 3u) {
+        let center = vec3f(1.85, 0.65, -1.15);
+        let distance = intersectSphere(ray, center, 0.65);
+
+        if (distance < closest) {
+            let position = ray.origin + ray.direction * distance;
+            let roughness = mix(0.30, 0.18, saturate(f32(sceneId & 1u)));
+            closest = distance;
+            result = makeHit(
+                distance,
+                position,
+                position - center,
+                vec3f(0.08, 0.68, 0.22),
+                roughness,
+                0.72,
+                1.50,
+                0.0
+            );
+        }
+    }
+
+    return result;
 }
 
-fn geometrySchlickGGX(
-    normalDotDirection: f32,
-    roughness: f32
-) -> f32 {
+// ---------------------------------------------------------------------------
+// Camera
+// ---------------------------------------------------------------------------
+
+fn cameraRay(pixel: vec2u, sampleIndex: u32, frame: u32) -> Ray {
+    let resolution = max(params.resolutionTime.xy, vec2f(1.0));
+    let jitter = random2(pixel, frame, sampleIndex, 11u) - vec2f(0.5);
+
+    let uv = (
+        vec2f(f32(pixel.x), f32(pixel.y)) +
+        vec2f(0.5) +
+        jitter
+    ) / resolution;
+
+    let ndc = uv * 2.0 - vec2f(1.0);
+    let aspect = max(params.cameraProjection.y, 0.001);
+    let fovRadians = radians(clamp(params.cameraProjection.x, 1.0, 170.0));
+    let tanHalfFov = tan(0.5 * fovRadians);
+
+    // Camera convention matches the current controls: yaw 0 / pitch 0 faces -Z.
+    let pitch = radians(clamp(params.cameraRotation.x, -89.0, 89.0));
+    let yaw = radians(params.cameraRotation.y);
+
+    let cp = cos(pitch);
+    let sp = sin(pitch);
+    let cy = cos(yaw);
+    let sy = sin(yaw);
+
+    let forward = safeNormalize(vec3f(
+        -sy * cp,
+        sp,
+        -cy * cp
+    ));
+
+    let right = safeNormalize(cross(forward, vec3f(0.0, 1.0, 0.0)));
+    let up = safeNormalize(cross(right, forward));
+
+    let direction = safeNormalize(
+        forward +
+        right * (ndc.x * aspect * tanHalfFov) +
+        up * (-ndc.y * tanHalfFov)
+    );
+
+    return Ray(
+        params.cameraPosition.xyz,
+        direction
+    );
+}
+
+// ---------------------------------------------------------------------------
+// BRDF / lighting
+// ---------------------------------------------------------------------------
+
+fn fresnelSchlick(cosTheta: f32, f0: vec3f) -> vec3f {
+    let factor = pow(1.0 - saturate(cosTheta), 5.0);
+    return f0 + (vec3f(1.0) - f0) * factor;
+}
+
+fn distributionGGX(normal: vec3f, halfVector: vec3f, roughness: f32) -> f32 {
+    let a = max(roughness * roughness, 0.002025);
+    let a2 = a * a;
+    let nDotH = max(dot(normal, halfVector), 0.0);
+    let nDotH2 = nDotH * nDotH;
+    let denominator = nDotH2 * (a2 - 1.0) + 1.0;
+
+    return a2 / max(PI * denominator * denominator, 1.0e-6);
+}
+
+fn geometrySchlickGGX(nDotDirection: f32, roughness: f32) -> f32 {
     let r = roughness + 1.0;
     let k = (r * r) / 8.0;
-
-    return normalDotDirection /
-        max(
-            normalDotDirection *
-            (1.0 - k) +
-            k,
-            0.000001
-        );
+    return nDotDirection / max(nDotDirection * (1.0 - k) + k, 1.0e-6);
 }
 
 fn geometrySmith(
@@ -257,1219 +389,312 @@ fn geometrySmith(
     lightDirection: vec3f,
     roughness: f32
 ) -> f32 {
-    let normalDotView =
-        max(
-            dot(normal, viewDirection),
-            0.0
-        );
-
-    let normalDotLight =
-        max(
-            dot(normal, lightDirection),
-            0.0
-        );
-
-    return
-        geometrySchlickGGX(
-            normalDotView,
-            roughness
-        ) *
-        geometrySchlickGGX(
-            normalDotLight,
-            roughness
-        );
+    let nDotV = max(dot(normal, viewDirection), 0.0);
+    let nDotL = max(dot(normal, lightDirection), 0.0);
+    return geometrySchlickGGX(nDotV, roughness) * geometrySchlickGGX(nDotL, roughness);
 }
 
-fn randomCosineHemisphere(
-    normal: vec3f,
-    randomValue: vec2f
-) -> vec3f {
-    let phi =
-        2.0 *
-        PI *
-        randomValue.x;
+fn tangentFor(normal: vec3f) -> vec3f {
+    if (abs(normal.y) < 0.999) {
+        return safeNormalize(cross(vec3f(0.0, 1.0, 0.0), normal));
+    }
+    return safeNormalize(cross(vec3f(1.0, 0.0, 0.0), normal));
+}
 
-    let radial =
-        sqrt(
-            max(
-                randomValue.y,
-                0.0
-            )
-        );
+fn cosineHemisphere(normal: vec3f, randomValue: vec2f) -> vec3f {
+    let phi = TWO_PI * randomValue.x;
+    let radial = sqrt(max(randomValue.y, 0.0));
+    let x = radial * cos(phi);
+    let y = sqrt(max(0.0, 1.0 - randomValue.y));
+    let z = radial * sin(phi);
 
-    let localX =
-        radial *
-        cos(phi);
-
-    let localY =
-        radial *
-        sin(phi);
-
-    let localZ =
-        sqrt(
-            max(
-                0.0,
-                1.0 -
-                randomValue.y
-            )
-        );
-
-    let tangentReference =
-        select(
-            vec3f(0.0, 1.0, 0.0),
-            vec3f(1.0, 0.0, 0.0),
-            abs(normal.y) > 0.95
-        );
-
-    let tangent =
-        safeNormalize(
-            cross(
-                tangentReference,
-                normal
-            )
-        );
-
-    let bitangent =
-        cross(
-            normal,
-            tangent
-        );
+    let tangent = tangentFor(normal);
+    let bitangent = cross(normal, tangent);
 
     return safeNormalize(
-        tangent * localX +
-        bitangent * localY +
-        normal * localZ
+        tangent * x +
+        normal * y +
+        bitangent * z
     );
 }
 
-fn sampleGGX(
-    normal: vec3f,
-    viewDirection: vec3f,
-    roughness: f32,
-    randomValue: vec2f
-) -> vec3f {
-    let a =
-        max(
-            roughness,
-            0.045
-        );
+fn sampleGGX(normal: vec3f, viewDirection: vec3f, roughness: f32, randomValue: vec2f) -> vec3f {
+    let alpha = max(roughness * roughness, 0.002025);
+    let alpha2 = alpha * alpha;
+    let phi = TWO_PI * randomValue.x;
 
-    let a2 =
-        a * a;
-
-    let phi =
-        2.0 *
-        PI *
-        randomValue.x;
-
-    let cosTheta =
-        sqrt(
-            (1.0 - randomValue.y) /
-            (
-                1.0 +
-                (a2 - 1.0) *
-                randomValue.y
-            )
-        );
-
-    let sinTheta =
-        sqrt(
-            max(
-                0.0,
-                1.0 -
-                cosTheta *
-                cosTheta
-            )
-        );
-
-    let tangentReference =
-        select(
-            vec3f(0.0, 1.0, 0.0),
-            vec3f(1.0, 0.0, 0.0),
-            abs(normal.y) > 0.95
-        );
-
-    let tangent =
-        safeNormalize(
-            cross(
-                tangentReference,
-                normal
-            )
-        );
-
-    let bitangent =
-        cross(
-            normal,
-            tangent
-        );
-
-    let halfVector =
-        safeNormalize(
-            tangent *
-            (sinTheta * cos(phi)) +
-            bitangent *
-            (sinTheta * sin(phi)) +
-            normal *
-            cosTheta
-        );
-
-    return reflectDirection(
-        -viewDirection,
-        halfVector
+    let cosTheta = sqrt(
+        (1.0 - randomValue.y) /
+        max(1.0 + (alpha2 - 1.0) * randomValue.y, 1.0e-6)
     );
-}
 
-fn intersectSphere(
-    ray: Ray,
-    sphere: Sphere,
-    currentClosest: f32
-) -> Hit {
-    let offset =
-        ray.origin -
-        sphere.center;
+    let sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+    let tangent = tangentFor(normal);
+    let bitangent = cross(normal, tangent);
 
-    let a =
-        dot(
-            ray.direction,
-            ray.direction
-        );
-
-    let halfB =
-        dot(
-            offset,
-            ray.direction
-        );
-
-    let c =
-        dot(
-            offset,
-            offset
-        ) -
-        sphere.radius *
-        sphere.radius;
-
-    let discriminant =
-        halfB *
-        halfB -
-        a *
-        c;
-
-    if (
-        discriminant <
-        0.0
-    ) {
-        return Hit(
-            0.0,
-            currentClosest,
-            vec3f(0.0),
-            vec3f(0.0, 1.0, 0.0),
-            vec3f(0.0),
-            sphere.material.roughness,
-            sphere.material.metallic,
-            sphere.material.ior
-        );
-    }
-
-    let sqrtDiscriminant =
-        sqrt(
-            discriminant
-        );
-
-    var root =
-        (-halfB -
-            sqrtDiscriminant) /
-        a;
-
-    if (
-        root <= EPSILON ||
-        root >= currentClosest
-    ) {
-        root =
-            (-halfB +
-                sqrtDiscriminant) /
-            a;
-    }
-
-    if (
-        root <= EPSILON ||
-        root >= currentClosest
-    ) {
-        return Hit(
-            0.0,
-            currentClosest,
-            vec3f(0.0),
-            vec3f(0.0, 1.0, 0.0),
-            vec3f(0.0),
-            sphere.material.roughness,
-            sphere.material.metallic,
-            sphere.material.ior
-        );
-    }
-
-    let position =
-        ray.origin +
-        ray.direction * root;
-
-    let normal =
-        safeNormalize(
-            position -
-            sphere.center
-        );
-
-    return Hit(
-        1.0,
-        root,
-        position,
-        normal,
-        sphere.material.albedo,
-        sphere.material.roughness,
-        sphere.material.metallic,
-        sphere.material.ior
+    let halfVector = safeNormalize(
+        tangent * (sinTheta * cos(phi)) +
+        bitangent * (sinTheta * sin(phi)) +
+        normal * cosTheta
     );
+
+    return safeNormalize(reflect(-viewDirection, halfVector));
 }
 
-fn intersectPlane(
-    ray: Ray,
-    currentClosest: f32
-) -> Hit {
-    let denominator =
-        ray.direction.y;
+fn skyColor(direction: vec3f) -> vec3f {
+    let t = saturate(0.5 * (direction.y + 1.0));
 
-    if (
-        abs(denominator) <
-        0.000001
-    ) {
-        return Hit(
-            0.0,
-            currentClosest,
-            vec3f(0.0),
-            vec3f(0.0, 1.0, 0.0),
-            vec3f(0.0),
-            params.material.x,
-            params.material.y,
-            params.material.z
-        );
-    }
+    let horizon = vec3f(0.012, 0.018, 0.028);
+    let zenith = vec3f(0.060, 0.085, 0.130);
+    var result = mix(horizon, zenith, t);
 
-    let distance =
-        -ray.origin.y /
-        denominator;
+    let lightDirection = safeNormalize(params.lightPosition.xyz - params.cameraPosition.xyz);
+    let sun = pow(max(dot(direction, lightDirection), 0.0), 700.0);
+    result += vec3f(1.0, 0.92, 0.78) * sun * 2.0;
 
-    if (
-        distance <= EPSILON ||
-        distance >= currentClosest
-    ) {
-        return Hit(
-            0.0,
-            currentClosest,
-            vec3f(0.0),
-            vec3f(0.0, 1.0, 0.0),
-            vec3f(0.0),
-            params.material.x,
-            params.material.y,
-            params.material.z
-        );
-    }
+    let horizonBand = pow(1.0 - abs(direction.y), 5.0);
+    result += vec3f(0.02, 0.028, 0.04) * horizonBand;
 
-    let position =
-        ray.origin +
-        ray.direction *
-        distance;
-
-    let checker =
-        (
-            i32(floor(position.x)) +
-            i32(floor(position.z))
-        ) & 1;
-
-    let baseColor =
-        select(
-            vec3f(0.08, 0.08, 0.08),
-            vec3f(0.32, 0.32, 0.32),
-            checker == 1
-        );
-
-    return Hit(
-        1.0,
-        distance,
-        position,
-        vec3f(0.0, 1.0, 0.0),
-        baseColor,
-        params.material.x,
-        params.material.y,
-        params.material.z
-    );
+    return max(result, vec3f(0.0));
 }
 
-fn intersectWorld(
-    ray: Ray
-) -> Hit {
-    var closest =
-        1.0e30;
-
-    var result =
-        Hit(
-            0.0,
-            closest,
-            vec3f(0.0),
-            vec3f(0.0, 1.0, 0.0),
-            vec3f(0.0),
-            params.material.x,
-            params.material.y,
-            params.material.z
-        );
-
-    let floorHit =
-        intersectPlane(
-            ray,
-            closest
-        );
-
-    if (
-        floorHit.hit > 0.5
-    ) {
-        closest =
-            floorHit.distance;
-
-        result =
-            floorHit;
-    }
-
-    let sphere0Hit =
-        intersectSphere(
-            ray,
-            SPHERE_0,
-            closest
-        );
-
-    if (
-        sphere0Hit.hit > 0.5
-    ) {
-        closest =
-            sphere0Hit.distance;
-
-        result =
-            sphere0Hit;
-    }
-
-    let sphere1Hit =
-        intersectSphere(
-            ray,
-            SPHERE_1,
-            closest
-        );
-
-    if (
-        sphere1Hit.hit > 0.5
-    ) {
-        closest =
-            sphere1Hit.distance;
-
-        result =
-            sphere1Hit;
-    }
-
-    let sphere2Hit =
-        intersectSphere(
-            ray,
-            SPHERE_2,
-            closest
-        );
-
-    if (
-        sphere2Hit.hit > 0.5
-    ) {
-        result =
-            sphere2Hit;
-    }
-
-    return result;
+fn shadowVisible(origin: vec3f, direction: vec3f, maxDistance: f32) -> bool {
+    let ray = Ray(origin, direction);
+    let blocker = intersectWorld(ray);
+    return blocker.hit < 0.5 || blocker.distance >= maxDistance;
 }
 
-fn skyColor(
-    direction: vec3f
-) -> vec3f {
-    let t =
-        0.5 *
-        (
-            direction.y +
-            1.0
-        );
+fn directLight(hit: Hit, viewDirection: vec3f) -> vec3f {
+    let lightVector = params.lightPosition.xyz - hit.position;
+    let lightDistance = length(lightVector);
 
-    let horizon =
-        vec3f(
-            0.72,
-            0.80,
-            0.94
-        );
-
-    let zenith =
-        vec3f(
-            0.05,
-            0.10,
-            0.20
-        );
-
-    return mix(
-        horizon,
-        zenith,
-        saturate1(t)
-    );
-}
-
-fn shadowVisible(
-    origin: vec3f,
-    direction: vec3f,
-    maxDistance: f32
-) -> bool {
-    let ray =
-        Ray(
-            origin,
-            direction
-        );
-
-    let blocker =
-        intersectWorld(
-            ray
-        );
-
-    return
-        blocker.hit < 0.5 ||
-        blocker.distance >=
-            maxDistance - EPSILON;
-}
-
-fn directLight(
-    hit: Hit,
-    viewDirection: vec3f
-) -> vec3f {
-    let lightPosition =
-        params.lightPosition.xyz;
-
-    let lightVector =
-        lightPosition -
-        hit.position;
-
-    let lightDistance =
-        length(
-            lightVector
-        );
-
-    if (
-        lightDistance <= 0.0001
-    ) {
+    if (lightDistance <= 1.0e-4) {
         return vec3f(0.0);
     }
 
-    let lightDirection =
-        lightVector /
-        lightDistance;
+    let lightDirection = lightVector / lightDistance;
+    let nDotL = max(dot(hit.normal, lightDirection), 0.0);
 
-    let normalDotLight =
-        max(
-            dot(
-                hit.normal,
-                lightDirection
-            ),
-            0.0
-        );
-
-    if (
-        normalDotLight <= 0.0
-    ) {
+    if (nDotL <= 0.0) {
         return vec3f(0.0);
     }
 
-    let shadowOrigin =
-        hit.position +
-        hit.normal *
-        EPSILON *
-        4.0;
-
-    if (
-        !shadowVisible(
-            shadowOrigin,
-            lightDirection,
-            lightDistance
-        )
-    ) {
+    let shadowOrigin = hit.position + hit.normal * (EPSILON * 8.0);
+    if (!shadowVisible(shadowOrigin, lightDirection, lightDistance - EPSILON * 10.0)) {
         return vec3f(0.0);
     }
 
-    let attenuation =
-        params.lightParams.x /
-        max(
-            lightDistance *
-            lightDistance,
-            1.0
-        );
+    let power = max(params.lightPosition.w, 0.0) * max(params.lightParams.x, 0.0);
+    let attenuation = power / max(lightDistance * lightDistance, 1.0);
 
-    let radiance =
-        vec3f(
-            attenuation
-        );
+    let halfVector = safeNormalize(viewDirection + lightDirection);
+    let nDotV = max(dot(hit.normal, viewDirection), 0.0);
+    let nDotH = max(dot(hit.normal, halfVector), 0.0);
+    let hDotV = max(dot(halfVector, viewDirection), 0.0);
 
-    let halfVector =
-        safeNormalize(
-            viewDirection +
-            lightDirection
-        );
+    let roughness = clamp(hit.roughness, 0.045, 1.0);
+    let f0 = mix(vec3f(0.04), hit.albedo, vec3f(hit.metallic));
+    let fresnel = fresnelSchlick(hDotV, f0);
 
-    let f0 =
-        mix(
-            vec3f(0.04),
-            hit.albedo,
-            vec3f(
-                hit.metallic
-            )
-        );
+    let distribution = distributionGGX(hit.normal, halfVector, roughness);
+    let geometry = geometrySmith(hit.normal, viewDirection, lightDirection, roughness);
 
-    let fresnel =
-        fresnelSchlick(
-            max(
-                dot(
-                    halfVector,
-                    viewDirection
-                ),
-                0.0
-            ),
-            f0
-        );
+    let specular = (
+        distribution * geometry * fresnel
+    ) / max(4.0 * nDotV * nDotL, 1.0e-5);
 
-    let distribution =
-        distributionGGX(
-            hit.normal,
-            halfVector,
-            hit.roughness
-        );
+    let diffuseWeight = (vec3f(1.0) - fresnel) * (1.0 - hit.metallic);
+    let diffuse = diffuseWeight * hit.albedo * INV_PI;
 
-    let geometry =
-        geometrySmith(
-            hit.normal,
-            viewDirection,
-            lightDirection,
-            hit.roughness
-        );
-
-    let denominator =
-        max(
-            4.0 *
-            max(
-                dot(
-                    hit.normal,
-                    viewDirection
-                ),
-                0.0
-            ) *
-            normalDotLight,
-            0.0001
-        );
-
-    let specular =
-        (
-            distribution *
-            geometry *
-            fresnel
-        ) /
-        denominator;
-
-    let diffuseStrength =
-        1.0 -
-        hit.metallic;
-
-    let diffuse =
-        (
-            vec3f(1.0) -
-            fresnel
-        ) *
-        hit.albedo *
-        diffuseStrength *
-        INV_PI;
-
-    return
-        (
-            diffuse +
-            specular
-        ) *
-        radiance *
-        normalDotLight;
+    return (diffuse + specular) * attenuation * nDotL;
 }
 
-fn tracePath(
-    ray: Ray,
-    pixel: vec2u,
-    frame: u32
-) -> vec3f {
-    var currentRay =
-        ray;
+// ---------------------------------------------------------------------------
+// Path tracing
+// ---------------------------------------------------------------------------
 
-    var throughput =
-        vec3f(1.0);
+fn tracePath(pixel: vec2u, frame: u32, sampleIndex: u32) -> vec3f {
+    var ray = cameraRay(pixel, sampleIndex, frame);
+    var throughput = vec3f(1.0);
+    var radiance = vec3f(0.0);
 
-    var radiance =
-        vec3f(0.0);
+    let bounceLimit = min(
+        u32(floor(max(params.quality.y, 1.0))),
+        MAX_BOUNCES
+    );
 
-    let configuredBounces =
-        max(
-            1.0,
-            params.quality.y
-        );
-
-    let bounceLimit =
-        min(
-            u32(
-                floor(
-                    configuredBounces
-                )
-            ),
-            MAX_BOUNCES
-        );
-
-    for (
-        var bounce: u32 = 0u;
-        bounce < bounceLimit;
-        bounce += 1u
-    ) {
-        let hit =
-            intersectWorld(
-                currentRay
-            );
-
-        if (
-            hit.hit < 0.5
-        ) {
-            radiance +=
-                throughput *
-                skyColor(
-                    currentRay.direction
-                );
-
+    for (var bounce = 0u; bounce < MAX_BOUNCES; bounce += 1u) {
+        if (bounce >= bounceLimit) {
             break;
         }
 
-        let viewDirection =
-            safeNormalize(
-                -currentRay.direction
+        let hit = intersectWorld(ray);
+
+        if (hit.hit < 0.5) {
+            radiance += throughput * skyColor(ray.direction);
+            break;
+        }
+
+        let viewDirection = safeNormalize(-ray.direction);
+        let localRoughness = clamp(hit.roughness, 0.045, 1.0);
+
+        radiance += throughput * directLight(hit, viewDirection);
+
+        // Very small ambient contribution so fully shadowed faces remain readable.
+        let ambient = max(params.lightParams.w, 0.0);
+        radiance += throughput * hit.albedo * ambient * 0.12;
+
+        let isGlass = hit.transmission > 0.5;
+
+        if (isGlass) {
+            let entering = dot(ray.direction, hit.normal) < 0.0;
+            let normal = select(-hit.normal, hit.normal, entering);
+            let eta = select(hit.ior, 1.0 / hit.ior, entering);
+            let cosTheta = min(dot(-ray.direction, normal), 1.0);
+            let sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+            let cannotRefract = eta * sinTheta > 1.0;
+
+            let f0 = vec3f(
+                pow((1.0 - hit.ior) / (1.0 + hit.ior), 2.0)
             );
+            let reflectProbability = fresnelSchlick(cosTheta, f0).x;
+            let randomValue = random01(pixel, frame, sampleIndex, bounce * 17u + 71u);
 
-        let emitted =
-            hit.albedo *
-            0.0;
-
-        radiance +=
-            throughput *
-            emitted;
-
-        let light =
-            directLight(
-                hit,
-                viewDirection
-            );
-
-        radiance +=
-            throughput *
-            light;
-
-        let materialId =
-            params.material.w;
-
-        let isGlass =
-            materialId >= 2.0;
-
-        let localRoughness =
-            clamp(
-                hit.roughness,
-                0.045,
-                1.0
-            );
-
-        if (
-            isGlass
-        ) {
-            let hitNormal =
-                hit.normal;
-
-            let entering =
-                dot(
-                    currentRay.direction,
-                    hitNormal
-                ) < 0.0;
-
-            let orientedNormal =
-                select(
-                    -hitNormal,
-                    hitNormal,
-                    entering
-                );
-
-            let eta =
-                select(
-                    hit.ior,
-                    1.0 / hit.ior,
-                    entering
-                );
-
-            let cosTheta =
-                min(
-                    dot(
-                        -currentRay.direction,
-                        orientedNormal
-                    ),
-                    1.0
-                );
-
-            let sinTheta =
-                sqrt(
-                    max(
-                        0.0,
-                        1.0 -
-                        cosTheta *
-                        cosTheta
-                    )
-                );
-
-            let cannotRefract =
-                eta *
-                sinTheta >
-                1.0;
-
-            let reflectProbability =
-                fresnelSchlick(
-                    cosTheta,
-                    vec3f(
-                        0.04
-                    )
-                ).x;
-
-            let randomValue =
-                random01(
-                    pixel,
-                    frame,
-                    bounce * 11u +
-                    7u
-                );
-
-            var nextDirection =
-                vec3f(0.0);
-
-            if (
-                cannotRefract ||
-                randomValue <
-                    reflectProbability
-            ) {
-                nextDirection =
-                    reflectDirection(
-                        currentRay.direction,
-                        orientedNormal
-                    );
+            var nextDirection: vec3f;
+            if (cannotRefract || randomValue < reflectProbability) {
+                nextDirection = safeNormalize(reflect(ray.direction, normal));
             } else {
-                nextDirection =
-                    refractDirection(
-                        currentRay.direction,
-                        orientedNormal,
-                        eta
-                    );
+                nextDirection = safeNormalize(refract(ray.direction, normal, eta));
             }
 
-            throughput *=
-                mix(
-                    hit.albedo,
-                    vec3f(1.0),
-                    0.65
-                );
-
-            currentRay =
-                Ray(
-                    hit.position +
-                        orientedNormal *
-                        EPSILON *
-                        6.0,
-                    nextDirection
-                );
-
+            throughput *= mix(hit.albedo, vec3f(1.0), 0.75);
+            let offsetNormal = select(-normal, normal, dot(nextDirection, normal) >= 0.0);
+            ray = Ray(
+                hit.position + offsetNormal * (EPSILON * 8.0),
+                nextDirection
+            );
             continue;
         }
 
-        let metallic =
-            saturate1(
-                hit.metallic
+        let f0 = mix(vec3f(0.04), hit.albedo, vec3f(hit.metallic));
+        let fresnel = fresnelSchlick(max(dot(hit.normal, viewDirection), 0.0), f0);
+        let specularWeight = clamp(maxComponent(fresnel), 0.04, 0.96);
+        let diffuseWeight = max((1.0 - hit.metallic) * (1.0 - specularWeight), 0.02);
+        let probabilitySum = specularWeight + diffuseWeight;
+        let specularProbability = specularWeight / probabilitySum;
+
+        let chooseSpecular = random01(
+            pixel,
+            frame,
+            sampleIndex,
+            bounce * 23u + 5u
+        ) < specularProbability;
+
+        var nextDirection = vec3f(0.0);
+
+        if (chooseSpecular) {
+            nextDirection = sampleGGX(
+                hit.normal,
+                viewDirection,
+                localRoughness,
+                random2(pixel, frame, sampleIndex, bounce * 29u + 11u)
             );
 
-        let specularProbability =
-            clamp(
-                mix(
-                    0.04,
-                    1.0,
-                    metallic
-                ),
-                0.05,
-                0.95
-            );
-
-        let randomSelect =
-            random01(
-                pixel,
-                frame,
-                bounce * 7u +
-                3u
-            );
-
-        var nextDirection =
-            vec3f(0.0);
-
-        if (
-            randomSelect <
-            specularProbability
-        ) {
-            nextDirection =
-                sampleGGX(
-                    hit.normal,
-                    viewDirection,
-                    localRoughness,
-                    random2(
-                        pixel,
-                        frame,
-                        bounce * 13u +
-                        19u
-                    )
-                );
-
-            if (
-                dot(
-                    nextDirection,
-                    hit.normal
-                ) <= 0.0
-            ) {
-                nextDirection =
-                    randomCosineHemisphere(
-                        hit.normal,
-                        random2(
-                            pixel,
-                            frame,
-                            bounce * 17u +
-                            29u
-                        )
-                    );
+            if (dot(nextDirection, hit.normal) <= 0.0) {
+                nextDirection = safeNormalize(reflect(ray.direction, hit.normal));
             }
 
-            let fresnel =
-                fresnelSchlick(
-                    max(
-                        dot(
-                            nextDirection,
-                            hit.normal
-                        ),
-                        0.0
-                    ),
-                    mix(
-                        vec3f(0.04),
-                        hit.albedo,
-                        vec3f(
-                            metallic
-                        )
-                    )
-                );
-
-            throughput *=
-                mix(
-                    hit.albedo,
-                    vec3f(1.0),
-                    fresnel
-                );
+            throughput *= fresnel / max(specularProbability, 0.05);
         } else {
-            nextDirection =
-                randomCosineHemisphere(
-                    hit.normal,
-                    random2(
-                        pixel,
-                        frame,
-                        bounce * 23u +
-                        37u
-                    )
-                );
-
-            throughput *=
-                hit.albedo;
-        }
-
-        currentRay =
-            Ray(
-                hit.position +
-                    hit.normal *
-                    EPSILON *
-                    6.0,
-                safeNormalize(
-                    nextDirection
-                )
+            nextDirection = cosineHemisphere(
+                hit.normal,
+                random2(pixel, frame, sampleIndex, bounce * 31u + 17u)
             );
 
-        if (
-            bounce >= 2u
-        ) {
-            let survive =
-                min(
-                    max3(
-                        throughput
-                    ),
-                    0.95
-                );
+            throughput *= hit.albedo * (1.0 - hit.metallic) / max(diffuseWeight, 0.02);
+        }
 
-            let roulette =
-                random01(
-                    pixel,
-                    frame,
-                    bounce * 31u +
-                    53u
-                );
+        // Russian roulette after the first two bounces.
+        if (bounce >= 2u) {
+            let survival = clamp(maxComponent(throughput), 0.05, 0.95);
+            let roulette = random01(pixel, frame, sampleIndex, bounce * 37u + 29u);
 
-            if (
-                roulette >
-                survive
-            ) {
+            if (roulette > survival) {
                 break;
             }
 
-            throughput /=
-                max(
-                    survive,
-                    0.05
-                );
+            throughput /= survival;
         }
+
+        // NaN/Inf guard. Keep one broken sample from poisoning the accumulation.
+        if (any(throughput != throughput)) {
+            break;
+        }
+
+        let offsetNormal = select(-hit.normal, hit.normal, dot(nextDirection, hit.normal) >= 0.0);
+        ray = Ray(
+            hit.position + offsetNormal * (EPSILON * 8.0),
+            safeNormalize(nextDirection)
+        );
     }
 
-    return max(
-        radiance,
-        vec3f(0.0)
-    );
+    return max(radiance, vec3f(0.0));
 }
 
-fn makeCameraRay(
-    pixel: vec2u,
-    sampleIndex: u32
-) -> Ray {
-    let width =
-        max(
-            params.resolutionTime.x,
-            1.0
-        );
-
-    let height =
-        max(
-            params.resolutionTime.y,
-            1.0
-        );
-
-    let frame =
-        u32(
-            max(
-                params.resolutionTime.z,
-                0.0
-            )
-        );
-
-    let randomJitter =
-        random2(
-            pixel,
-            frame + sampleIndex * 17u,
-            101u
-        ) -
-        vec2f(0.5);
-
-    let uv =
-        (
-            (
-                vec2f(
-                    f32(pixel.x),
-                    f32(pixel.y)
-                ) +
-                vec2f(0.5) +
-                randomJitter
-            ) /
-            vec2f(
-                width,
-                height
-            )
-        ) *
-        2.0 -
-        vec2f(1.0);
-
-    let aspect =
-        params.cameraProjection.y;
-
-    let fovRadians =
-        radians(
-            params.cameraProjection.x
-        );
-
-    let tanHalfFov =
-        tan(
-            fovRadians *
-            0.5
-        );
-
-    var direction =
-        safeNormalize(
-            vec3f(
-                uv.x *
-                    aspect *
-                    tanHalfFov,
-                -uv.y *
-                    tanHalfFov,
-                -1.0
-            )
-        );
-
-    let pitch =
-        radians(
-            params.cameraRotation.x
-        );
-
-    let yaw =
-        radians(
-            params.cameraRotation.y
-        );
-
-    let cosPitch =
-        cos(pitch);
-
-    let sinPitch =
-        sin(pitch);
-
-    let cosYaw =
-        cos(yaw);
-
-    let sinYaw =
-        sin(yaw);
-
-    direction =
-        vec3f(
-            direction.x * cosYaw -
-                direction.z * sinYaw,
-            direction.y,
-            direction.x * sinYaw +
-                direction.z * cosYaw
-        );
-
-    direction =
-        vec3f(
-            direction.x,
-            direction.y * cosPitch -
-                direction.z * sinPitch,
-            direction.y * sinPitch +
-                direction.z * cosPitch
-        );
-
-    direction =
-        safeNormalize(
-            direction
-        );
-
-    return Ray(
-        params.cameraPosition.xyz,
-        direction
-    );
-}
+// ---------------------------------------------------------------------------
+// Compute entry
+// ---------------------------------------------------------------------------
 
 @compute @workgroup_size(8, 8, 1)
-fn main(
-    @builtin(global_invocation_id)
-    globalId: vec3u
-) {
-    let width =
-        u32(
-            params.resolutionTime.x
-        );
+fn main(@builtin(global_invocation_id) globalId: vec3u) {
+    let width = max(u32(max(params.resolutionTime.x, 1.0)), 1u);
+    let height = max(u32(max(params.resolutionTime.y, 1.0)), 1u);
 
-    let height =
-        u32(
-            params.resolutionTime.y
-        );
-
-    if (
-        globalId.x >= width ||
-        globalId.y >= height
-    ) {
+    if (globalId.x >= width || globalId.y >= height) {
         return;
     }
 
-    let pixelIndex =
-        globalId.y *
-        width +
-        globalId.x;
+    let pixelIndex = globalId.y * width + globalId.x;
+    let frame = u32(max(params.resolutionTime.z, 0.0));
 
-    let configuredSamples =
-        max(
-            1.0,
-            params.quality.x
-        );
+    var previous = accumulation[pixelIndex];
+    var previousColor = previous.rgb;
+    var previousCount = max(previous.a, 0.0);
 
-    let sampleIndex =
-        u32(
-            max(
-                params.resolutionTime.z,
-                0.0
-            )
-        ) %
-        max(
-            u32(
-                floor(
-                    configuredSamples
-                )
-            ),
-            1u
-        );
+    let accumulationEnabled = params.quality.z > 0.5;
+    if (!accumulationEnabled) {
+        previousColor = vec3f(0.0);
+        previousCount = 0.0;
+    }
 
-    let frame =
-        u32(
-            max(
-                params.resolutionTime.z,
-                0.0
-            )
-        );
+    let sampleCount = min(
+        u32(floor(max(params.quality.x, 1.0))),
+        MAX_SAMPLES
+    );
 
-    let ray =
-        makeCameraRay(
+    var sampleSum = vec3f(0.0);
+
+    for (var sampleIndex = 0u; sampleIndex < MAX_SAMPLES; sampleIndex += 1u) {
+        if (sampleIndex >= sampleCount) {
+            break;
+        }
+
+        sampleSum += tracePath(
             globalId.xy,
+            frame,
             sampleIndex
         );
-
-    let sample =
-        tracePath(
-            ray,
-            globalId.xy,
-            frame
-        );
-
-    let accumulationEnabled =
-        params.quality.z >
-        0.5;
-
-    let firstFrame =
-        frame < 0.5;
-
-    if (
-        !accumulationEnabled ||
-        firstFrame
-    ) {
-        accumulation[pixelIndex] =
-            vec4f(
-                sample,
-                1.0
-            );
-    } else {
-        let previous =
-            accumulation[
-                pixelIndex
-            ];
-
-        accumulation[
-            pixelIndex
-        ] =
-            vec4f(
-                previous.rgb +
-                    sample,
-                previous.a +
-                    1.0
-            );
     }
+
+    let sampleWeight = f32(sampleCount);
+    let newCount = previousCount + sampleWeight;
+
+    // Store a true running HDR SUM. display.wgsl divides rgb by alpha, so
+    // the render remains correctly normalized after every additional batch.
+    var result = previousColor + sampleSum;
+
+    // Keep the accumulation finite and comfortably inside the HDR range.
+    result = clamp(result, vec3f(0.0), vec3f(65504.0));
+
+    accumulation[pixelIndex] = vec4f(result, newCount);
 }
