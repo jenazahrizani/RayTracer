@@ -88,7 +88,7 @@ const DEFAULT_MAX_STEPS: u32 = 500;
 
 const DEFAULT_REPLAY_CAPACITY: usize = 20_000;
 const DEFAULT_BATCH_SIZE: usize = 64;
-const DEFAULT_TARGET_UPDATE: u64 = 1_000;
+const DEFAULT_TARGET_UPDATE: u64 = 250;
 
 
 // -----------------------------------------------------------------------------
@@ -690,8 +690,10 @@ impl Environment {
             self.target.z -
             self.start.z;
 
+        // Movement convention is direction=(sin(heading), cos(heading)),
+        // therefore the world heading toward (dx,dz) is atan2(dx,dz).
         let target_heading =
-            dz.atan2(dx);
+            dx.atan2(dz);
 
         self.agent =
             Agent {
@@ -702,11 +704,10 @@ impl Environment {
                 ),
 
                 heading:
-                    target_heading -
-                    PI * 0.5 +
+                    target_heading +
                     self.rng.range_f32(
-                        -0.4,
-                        0.4,
+                        -0.65,
+                        0.65,
                     ),
 
                 speed: 0.0,
@@ -1034,7 +1035,7 @@ impl Environment {
 
             done = true;
 
-            reward = -1.0;
+            reward = -2.0;
 
             self.collision = true;
 
@@ -1054,17 +1055,53 @@ impl Environment {
             // PROGRESS REWARD
             // -----------------------------------------------------------------
 
+            let progress =
+                previous_distance -
+                new_distance;
+
             reward +=
+                progress *
+                0.35;
+
+            // Dense directional signal. The network gets a small positive
+            // value for facing the target and a negative value for turning
+            // away, which makes credit assignment much easier than relying
+            // on the terminal +1 alone.
+            let target_heading =
                 (
-                    previous_distance -
-                    new_distance
+                    self.target.x -
+                    self.agent.position.x
                 )
-                * 0.10;
+                .atan2(
+                    self.target.z -
+                    self.agent.position.z
+                );
+
+            let heading_error =
+                wrap_angle(
+                    target_heading -
+                    self.agent.heading,
+                );
+
+            reward +=
+                heading_error.cos() *
+                0.010;
+
+            // Penalize getting dangerously close to an obstacle. The sensor
+            // value is normalized distance, so this is local and scale-free.
+            let front_clearance =
+                self.sensors[0];
+
+            if front_clearance < 0.35 {
+                reward -=
+                    (0.35 - front_clearance) *
+                    0.035;
+            }
 
             reward =
                 reward.clamp(
-                    -0.05,
-                    0.05,
+                    -0.20,
+                    0.20,
                 );
 
 
@@ -1079,7 +1116,7 @@ impl Environment {
 
                 success = true;
 
-                reward += 1.0;
+                reward += 2.0;
 
                 self.success = true;
             } else if
@@ -1262,18 +1299,19 @@ impl Environment {
             )
             .sqrt();
 
+        // Agent heading convention:
+        //   heading = 0 means +Z
+        //   direction = (sin(heading), 0, cos(heading))
+        // Therefore target heading must be atan2(dx, dz).
         let target_heading =
-            dz.atan2(
-                dx
+            dx.atan2(
+                dz
             );
 
         let angle =
             wrap_angle(
                 target_heading -
-                (
-                    self.agent.heading -
-                    PI * 0.5
-                ),
+                self.agent.heading,
             );
 
         observation[32] =
@@ -2070,29 +2108,30 @@ impl Network {
                 &transition.state
             );
 
-        let next_q =
-            target_network.q_values(
+        // Double-DQN target: choose the next action with the online network,
+        // then evaluate that action with the target network. This sharply
+        // reduces the tendency of a small noisy network to overestimate one
+        // action and lock into it.
+        let online_next =
+            self.q_values(
                 &transition.next_state
             );
 
-        let mut max_next =
-            next_q[0];
+        let next_action =
+            argmax(&online_next);
 
-        for value in
-            &next_q[1..]
-        {
-            max_next =
-                max_next.max(
-                    *value
-                );
-        }
+        let target_q =
+            target_network.q_values(
+                &transition.next_state
+            );
 
         let target =
             transition.reward +
             if transition.done {
                 0.0
             } else {
-                gamma * max_next
+                gamma *
+                target_q[next_action]
             };
 
         let action =
@@ -2110,11 +2149,15 @@ impl Network {
         let mut delta_3 =
             [0.0; ACTION_COUNT];
 
+        // Huber loss keeps large TD errors from destabilizing all three
+        // network layers while preserving the ordinary squared-error slope
+        // near the optimum.
         delta_3[action] =
-            error.clamp(
-                -5.0,
-                5.0,
-            );
+            if error.abs() <= 1.0 {
+                error
+            } else {
+                error.signum()
+            };
 
 
         // ---------------------------------------------------------------------
@@ -2314,12 +2357,17 @@ impl Network {
 
 
         // ---------------------------------------------------------------------
-        // MSE
+        // Huber loss
         // ---------------------------------------------------------------------
 
-        0.5 *
-        error *
-        error
+        if error.abs() <= 1.0 {
+            0.5 *
+            error *
+            error
+        } else {
+            error.abs() -
+            0.5
+        }
     }
 
 
@@ -2556,7 +2604,7 @@ impl RayTracerEngine {
             rng,
 
             learning_rate:
-                0.001,
+                0.0005,
 
             gamma:
                 0.99,
@@ -2568,7 +2616,7 @@ impl RayTracerEngine {
                 0.05,
 
             epsilon_decay:
-                0.995,
+                0.9975,
 
             batch_size:
                 DEFAULT_BATCH_SIZE,
@@ -2625,7 +2673,7 @@ impl RayTracerEngine {
     pub fn version(
         &self,
     ) -> String {
-        "RAYTRC.AI.NAV/1.1.0"
+        "RAYTRC.AI.NAV/1.2.0"
             .to_string()
     }
 
@@ -2810,8 +2858,10 @@ impl RayTracerEngine {
             self.environment.target.z -
             self.environment.start.z;
 
+        // Movement convention is direction=(sin(heading), cos(heading)),
+        // therefore the world heading toward (dx,dz) is atan2(dx,dz).
         let target_heading =
-            dz.atan2(dx);
+            dx.atan2(dz);
 
         self.environment.step =
             0;
@@ -2837,8 +2887,7 @@ impl RayTracerEngine {
                 ),
 
                 heading:
-                    target_heading -
-                    PI * 0.5,
+                    target_heading,
 
                 speed: 0.0,
             };
@@ -3405,7 +3454,7 @@ impl RayTracerEngine {
                 .observation();
 
         let action =
-            self.select_action(
+            self.select_training_action(
                 &state
             );
 
@@ -3442,26 +3491,18 @@ impl RayTracerEngine {
         // LEARN
         // ---------------------------------------------------------------------
 
+        // One replay update per environment step. The old implementation
+        // sampled `batch_size` transitions AND performed a weight update for
+        // every one of them, effectively doing 64 optimizer steps per env
+        // step when batch_size=64. That made the small DQN overfit/oscillate
+        // instead of steadily improving. The replay threshold remains the
+        // warm-up condition; each step performs one sampled update.
         if self.replay.len() >=
            self.batch_size
         {
             self.last_loss =
-                self.train_batch();
+                self.train_replay_update();
         }
-
-
-        // ---------------------------------------------------------------------
-        // EXPLORATION DECAY
-        // ---------------------------------------------------------------------
-
-        self.epsilon =
-            (
-                self.epsilon *
-                self.epsilon_decay
-            )
-            .max(
-                self.epsilon_min
-            );
 
 
         // ---------------------------------------------------------------------
@@ -4475,6 +4516,89 @@ impl RayTracerEngine {
 
 
     // =========================================================================
+    // INTERNAL: EXPERT BOOTSTRAP POLICY
+    // =========================================================================
+
+    fn expert_action(
+        &self,
+        state: &[f32; OBS_SIZE],
+    ) -> usize {
+        let angle =
+            state[33].atan2(
+                state[34]
+            );
+
+        let front =
+            state[0];
+
+        // Rays are ordered around the agent from the current heading. Index 0
+        // is straight ahead; indices 1..=4 are the right-front arc and
+        // indices 28..31 are the left-front arc.
+        let mut right_clearance =
+            0.0f32;
+        let mut left_clearance =
+            0.0f32;
+
+        for index in 1..=4 {
+            right_clearance +=
+                state[index];
+        }
+
+        for index in 28..SENSOR_COUNT {
+            left_clearance +=
+                state[index];
+        }
+
+        right_clearance /= 4.0;
+        left_clearance /= 4.0;
+
+        let target_wants_right =
+            angle > 0.22;
+        let target_wants_left =
+            angle < -0.22;
+
+        // Emergency obstacle avoidance has priority over target steering.
+        if front < 0.18 {
+            if right_clearance > left_clearance {
+                return 2; // RIGHT
+            }
+
+            return 1; // LEFT
+        }
+
+        // Bias toward the target, but do not blindly turn into a wall.
+        if target_wants_right {
+            if right_clearance < 0.25 &&
+               left_clearance > right_clearance
+            {
+                return 1; // LEFT
+            }
+
+            return 2; // RIGHT
+        }
+
+        if target_wants_left {
+            if left_clearance < 0.25 &&
+               right_clearance > left_clearance
+            {
+                return 2; // RIGHT
+            }
+
+            return 1; // LEFT
+        }
+
+        if front < 0.32 {
+            if right_clearance > left_clearance {
+                return 2;
+            }
+
+            return 1;
+        }
+
+        0 // FORWARD
+    }
+
+    // =========================================================================
     // INTERNAL: ACTION SELECTION
     // =========================================================================
 
@@ -4482,27 +4606,101 @@ impl RayTracerEngine {
         &mut self,
         state: &[f32; OBS_SIZE],
     ) -> usize {
-        if self.rng.next_f32() <
-           self.epsilon
-        {
-            self.rng.range_usize(
-                ACTION_COUNT
-            )
-        } else {
-            argmax(
-                &self.network.q_values(
-                    state
+        let moving_actions = [
+            0usize, // FORWARD
+            1usize, // LEFT
+            2usize, // RIGHT
+            4usize, // REVERSE
+        ];
+
+        let speed =
+            state[35].clamp(
+                0.0,
+                1.0,
+            );
+
+        if self.rng.next_f32() < self.epsilon {
+            if speed < 0.15 {
+                moving_actions[
+                    self.rng.range_usize(
+                        moving_actions.len()
+                    )
+                ]
+            } else {
+                self.rng.range_usize(
+                    ACTION_COUNT
                 )
-            )
+            }
+        } else {
+            let q =
+                self.network.q_values(
+                    state
+                );
+
+            let mut action =
+                argmax(&q);
+
+            if action == 3 &&
+               speed < 0.15
+            {
+                action =
+                    moving_actions[0];
+
+                let mut best =
+                    q[action];
+
+                for candidate in
+                    moving_actions.iter()
+                        .copied()
+                        .skip(1)
+                {
+                    if q[candidate] >
+                       best
+                    {
+                        best =
+                            q[candidate];
+
+                        action =
+                            candidate;
+                    }
+                }
+            }
+
+            action
         }
     }
 
+    fn select_training_action(
+        &mut self,
+        state: &[f32; OBS_SIZE],
+    ) -> usize {
+        // Early training is mostly guided by a cheap geometry teacher. The
+        // teacher probability automatically falls as epsilon falls, leaving
+        // the final policy to the learned network instead of hard-coding the
+        // heuristic into RUN mode.
+        let teacher_probability =
+            (0.10 + self.epsilon * 0.60)
+                .clamp(
+                    0.10,
+                    0.70,
+                );
+
+        if self.rng.next_f32() <
+           teacher_probability
+        {
+            return self.expert_action(
+                state
+            );
+        }
+
+        self.select_action(state)
+    }
 
     // =========================================================================
     // INTERNAL: BATCH TRAINING
     // =========================================================================
 
-    fn train_batch(
+    fn train_replay_update(
         &mut self,
     ) -> f32 {
         if self.replay.len() <
@@ -4511,32 +4709,22 @@ impl RayTracerEngine {
             return self.last_loss;
         }
 
-        let mut total_loss =
-            0.0f32;
-
-        for _ in
-            0..self.batch_size
+        match self.replay.sample(
+            &mut self.rng
+        )
         {
-            if let Some(
-                transition
-            ) =
-            self.replay.sample(
-                &mut self.rng
-            )
-            {
-                total_loss +=
-                    self.network
-                        .train_sample(
-                            &self.target_network,
-                            &transition,
-                            self.learning_rate,
-                            self.gamma,
-                        );
-            }
-        }
+            Some(transition) =>
+                self.network
+                    .train_sample(
+                        &self.target_network,
+                        &transition,
+                        self.learning_rate,
+                        self.gamma,
+                    ),
 
-        total_loss /
-        self.batch_size as f32
+            None =>
+                self.last_loss,
+        }
     }
 
 
@@ -4589,6 +4777,18 @@ impl RayTracerEngine {
             self.collision_episodes +=
                 1;
         }
+
+        // Epsilon decays once per episode. With the default 0.995 this
+        // preserves meaningful exploration for hundreds of episodes instead
+        // of collapsing to epsilon_min after only a few hundred steps.
+        self.epsilon =
+            (
+                self.epsilon *
+                self.epsilon_decay
+            )
+            .max(
+                self.epsilon_min
+            );
     }
 }
 

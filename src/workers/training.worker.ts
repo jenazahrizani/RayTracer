@@ -533,8 +533,8 @@ function runTrainingChunk(
   try {
     const modelSyncStride =
       mode === "episodes"
-        ? 4
-        : 1024;
+        ? 1
+        : 128;
 
     let nextCompleted =
       completed;
@@ -729,12 +729,6 @@ async function startTraining(
   const target =
     await loadEngine();
 
-  applyConfig(
-    target,
-    (message.config ??
-      {}) as TrainingWorkerConfig,
-  );
-
   const model =
     String(
       message.model ??
@@ -751,6 +745,15 @@ async function startTraining(
       "training worker could not import the current model",
     );
   }
+
+  // Apply the current UI training configuration AFTER model import.
+  // import_model() restores learning_rate/gamma/epsilon from the snapshot,
+  // which otherwise silently overrides the user's current settings.
+  applyConfig(
+    target,
+    (message.config ??
+      {}) as TrainingWorkerConfig,
+  );
 
   const seed =
     finite(
@@ -846,12 +849,6 @@ async function evaluate(
   const target =
     await loadEngine();
 
-  applyConfig(
-    target,
-    (message.config ??
-      {}) as TrainingWorkerConfig,
-  );
-
   const model =
     String(
       message.model ??
@@ -868,6 +865,15 @@ async function evaluate(
       "evaluation worker could not import the current model",
     );
   }
+
+  // Apply the current UI training configuration AFTER model import.
+  // import_model() restores learning_rate/gamma/epsilon from the snapshot,
+  // which otherwise silently overrides the user's current settings.
+  applyConfig(
+    target,
+    (message.config ??
+      {}) as TrainingWorkerConfig,
+  );
 
   const requested =
     Math.max(
