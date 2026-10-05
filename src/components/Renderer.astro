@@ -582,13 +582,13 @@
     obstacles: 12,
     episodeSteps: 1000,
 
-    learningRate: 0.001,
+    learningRate: 0.0005,
     gamma: 0.99,
     batchSize: 64,
     epsilon: 1,
     epsilonMin: 0.05,
-    epsilonDecay: 0.995,
-    targetUpdate: 1000,
+    epsilonDecay: 0.9975,
+    targetUpdate: 250,
 
     trainChunk: 250,
   };
@@ -611,7 +611,7 @@
     episodeReward: 0,
     loss: 0,
     epsilon: 1,
-    learningRate: 0.001,
+    learningRate: 0.0005,
     gamma: 0.99,
     replay: 0,
 
@@ -4036,27 +4036,66 @@ fn fsMain(input: VSOut) -> @location(0) vec4<f32> {
         }
 
         if (terminalSuccess) {
-          if (previewIsTraining) {
-            trainingPreview = false;
-          } else {
-            runMode = false;
+          /*
+           * SUCCESS is intentionally different from COLLISION.
+           * Reaching the target means the episode is complete, so
+           * immediately generate a NEW MAP and continue autonomous
+           * navigation without requiring another RUN command.
+           */
+          const previousSeed =
+            finite(
+              engine.current_seed(),
+              0,
+            );
+
+          let nextSeed =
+            (
+              (Date.now() >>> 0) ^
+              (
+                Math.floor(
+                  performance.now() * 1000,
+                ) >>> 0
+              )
+            ) >>> 0;
+
+          if (nextSeed === previousSeed) {
+            nextSeed =
+              (
+                previousSeed +
+                0x9e3779b9
+              ) >>> 0;
           }
 
-          recoveryMoveFrames = 0;
+          engine.reset_environment(
+            nextSeed,
+          );
+
+          recoveryMoveFrames = 3;
           runStallFrames = 0;
           runLastDistance =
             Number.POSITIVE_INFINITY;
+          lastInferenceTime = 0;
+          currentAction = 0;
 
-          setMode("HOLD");
-          setState("SUCCESS");
+          setMode(
+            previewIsTraining
+              ? "TRAIN-NEW-MAP"
+              : "RUN-NEW-MAP",
+          );
+          setState("RUNNING");
 
           snapshot.status =
-            "TARGET REACHED / MAP HOLD";
+            previewIsTraining
+              ? "TARGET REACHED / NEW MAP / TRAIN CONTINUE"
+              : "TARGET REACHED / NEW MAP / RUN CONTINUE";
 
           setMessage(
-            "TARGET REACHED / PRESS RUN FOR NEXT MAP",
+            previewIsTraining
+              ? "TARGET REACHED / NEW MAP / TRAINING CONTINUES"
+              : "TARGET REACHED / NEW MAP / AUTONOMOUS CONTINUES",
           );
 
+          syncWorldBuffers();
           syncSnapshot();
           return;
         }
@@ -4295,31 +4334,64 @@ fn fsMain(input: VSOut) -> @location(0) vec4<f32> {
       }
 
       /*
-       * Success is the only normal terminal condition that stops the
-       * foreground visualizer.
+       * Success completes the current episode. Unlike collision, it
+       * immediately rolls into a completely NEW map and continues.
        */
       if (success) {
-        if (previewIsTraining) {
-          trainingPreview = false;
-        } else {
-          runMode = false;
+        const previousSeed =
+          finite(
+            engine.current_seed(),
+            0,
+          );
+
+        let nextSeed =
+          (
+            (Date.now() >>> 0) ^
+            (
+              Math.floor(
+                performance.now() * 1000,
+              ) >>> 0
+            )
+          ) >>> 0;
+
+        if (nextSeed === previousSeed) {
+          nextSeed =
+            (
+              previousSeed +
+              0x9e3779b9
+            ) >>> 0;
         }
 
-        recoveryMoveFrames = 0;
+        engine.reset_environment(
+          nextSeed,
+        );
+
+        recoveryMoveFrames = 3;
         runStallFrames = 0;
         runLastDistance =
           Number.POSITIVE_INFINITY;
+        lastInferenceTime = 0;
+        currentAction = 0;
 
-        setMode("HOLD");
-        setState("SUCCESS");
+        setMode(
+          previewIsTraining
+            ? "TRAIN-NEW-MAP"
+            : "RUN-NEW-MAP",
+        );
+        setState("RUNNING");
 
         snapshot.status =
-          "TARGET REACHED / MAP HOLD";
+          previewIsTraining
+            ? "TARGET REACHED / NEW MAP / TRAIN CONTINUE"
+            : "TARGET REACHED / NEW MAP / RUN CONTINUE";
 
         setMessage(
-          "TARGET REACHED / PRESS RUN FOR NEXT MAP",
+          previewIsTraining
+            ? "TARGET REACHED / NEW MAP / TRAINING CONTINUES"
+            : "TARGET REACHED / NEW MAP / AUTONOMOUS CONTINUES",
         );
 
+        syncWorldBuffers();
         syncSnapshot();
         return;
       }
@@ -5555,7 +5627,7 @@ fn fsMain(input: VSOut) -> @location(0) vec4<f32> {
         1000,
 
       learningRate:
-        0.001,
+        0.0005,
 
       gamma:
         0.99,
@@ -5570,10 +5642,10 @@ fn fsMain(input: VSOut) -> @location(0) vec4<f32> {
         0.05,
 
       epsilonDecay:
-        0.995,
+        0.9975,
 
       targetUpdate:
-        1000,
+        250,
 
       trainChunk:
         250,
@@ -5611,9 +5683,8 @@ fn fsMain(input: VSOut) -> @location(0) vec4<f32> {
       0;
 
     /*
-     * A completed episode is intentionally held.
-     * RUN is the explicit user action that starts
-     * the next episode and therefore the next map.
+     * RUN can also be pressed after a terminal state, but normal
+     * successful navigation already rotates to a new map automatically.
      */
     if (
       engine.is_done()
